@@ -1,17 +1,24 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { UploadCloud, FileWarning, ClipboardCopy, Settings } from 'lucide-react';
+import { UploadCloud, FileWarning, ClipboardCopy } from 'lucide-react';
+import { sortFilesByNumericName } from '../utils/fileSort';
 
 interface UploadZoneProps {
-  onImagesAdded: (images: { imageSrc: string; fileName: string; width: number; height: number }[]) => void;
-  existingDimensions?: { width: number; height: number } | null;
+  onFilesSelected: (files: File[]) => void | Promise<void>;
+  uploading?: boolean;
 }
 
-export default function UploadZone({ onImagesAdded, existingDimensions }: UploadZoneProps) {
+const VALID_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+const VALID_EXT = /\.(png|jpe?g|webp)$/i;
+
+function isValidImageFile(file: File): boolean {
+  return VALID_TYPES.includes(file.type) || VALID_EXT.test(file.name);
+}
+
+export default function UploadZone({ onFilesSelected, uploading = false }: UploadZoneProps) {
   const [isDragActive, setIsDragActive] = useState(false);
   const [errorLog, setErrorLog] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Focus and capture paste events
   useEffect(() => {
     const handlePaste = async (e: ClipboardEvent) => {
       const items = e.clipboardData?.items;
@@ -37,7 +44,7 @@ export default function UploadZone({ onImagesAdded, existingDimensions }: Upload
     return () => {
       window.removeEventListener('paste', handlePaste);
     };
-  }, [existingDimensions]);
+  }, [uploading]);
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
@@ -65,84 +72,28 @@ export default function UploadZone({ onImagesAdded, existingDimensions }: Upload
     if (e.target.files && e.target.files.length > 0) {
       await processFiles(Array.from(e.target.files));
     }
-    // reset input
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   };
 
-  const getImgInfo = (src: string): Promise<{ width: number; height: number }> => {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => {
-        resolve({ width: img.width, height: img.height });
-      };
-      img.onerror = () => {
-        reject(new Error('Failed to load image file'));
-      };
-      img.src = src;
-    });
-  };
-
   const processFiles = async (files: File[]) => {
-    const validFormats = ['image/png', 'image/jpeg', 'image/webp'];
-    const filteredFiles = files.filter(f => validFormats.includes(f.type) || f.name.match(/\.(png|jpe?g|webp)$/i));
+    if (uploading) return;
+
+    const filteredFiles = sortFilesByNumericName(files.filter(isValidImageFile));
 
     if (filteredFiles.length === 0) {
-      setErrorLog("No valid PNG, JPG, or WEBP images detected.");
+      setErrorLog('No valid PNG, JPG, or WEBP images detected.');
       return;
     }
 
-    const processedImages: { imageSrc: string; fileName: string; width: number; height: number }[] = [];
-    let currentBaseline = existingDimensions || null;
-
-    for (let i = 0; i < filteredFiles.length; i++) {
-      const file = filteredFiles[i];
-      try {
-        const dataUrl = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
-
-        const { width, height } = await getImgInfo(dataUrl);
-
-        if (!currentBaseline) {
-          // Establish the baseline size
-          currentBaseline = { width, height };
-        } else {
-          // Validate size match
-          if (width !== currentBaseline.width || height !== currentBaseline.height) {
-            setErrorLog(
-              `ValidationError: Dimension mismatch on "${file.name}". Expected ${currentBaseline.width}x${currentBaseline.height}, but got ${width}x${height}. All sprite frames inside a sheet MUST have identical sizes.`
-            );
-            return;
-          }
-        }
-
-        processedImages.push({
-          imageSrc: dataUrl,
-          fileName: file.name,
-          width,
-          height
-        });
-      } catch (err) {
-        setErrorLog("Failed to process one of the images.");
-        return;
-      }
-    }
-
-    if (processedImages.length > 0) {
-      setErrorLog(null);
-      onImagesAdded(processedImages);
-    }
+    setErrorLog(null);
+    await onFilesSelected(filteredFiles);
   };
 
   const triggerSelect = () => {
-    if (fileInputRef.current) {
-      fileInputRef.current.click();
-    }
+    if (uploading) return;
+    fileInputRef.current?.click();
   };
 
   return (
@@ -154,24 +105,29 @@ export default function UploadZone({ onImagesAdded, existingDimensions }: Upload
         onDrop={handleDrop}
         onClick={triggerSelect}
         className={`relative cursor-pointer border-2 border-dashed rounded-xl p-8 flex flex-col items-center text-center justify-center min-h-[170px] transition-all focus:outline-none ${
-          isDragActive 
-            ? 'border-indigo-400 bg-indigo-950/20 shadow-[0_0_15px_rgba(99,102,241,0.15)]' 
-            : 'border-slate-700 hover:border-slate-500 bg-slate-900/50 hover:bg-slate-900/90'
+          uploading
+            ? 'opacity-60 pointer-events-none border-slate-700 bg-slate-900/30'
+            : isDragActive
+              ? 'border-indigo-400 bg-indigo-950/20 shadow-[0_0_15px_rgba(99,102,241,0.15)]'
+              : 'border-slate-700 hover:border-slate-500 bg-slate-900/50 hover:bg-slate-900/90'
         }`}
       >
         <input
           type="file"
           ref={fileInputRef}
           multiple
-          accept=".png,.jpg,.jpeg,.webp"
+          accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
           onChange={handleFileSelect}
           className="hidden"
+          disabled={uploading}
         />
 
         <UploadCloud className={`w-10 h-10 ${isDragActive ? 'text-indigo-400 animate-bounce' : 'text-slate-500'} mb-3`} />
 
         <p className="text-sm font-semibold text-slate-200">
-          Drag & Drop files here, or <span className="text-indigo-400 hover:underline">browse files</span>
+          {uploading ? 'Uploading…' : (
+            <>Drag & Drop files here, or <span className="text-indigo-400 hover:underline">browse files</span></>
+          )}
         </p>
 
         <p className="text-xs text-slate-400 mt-2 flex items-center gap-1">
@@ -180,9 +136,7 @@ export default function UploadZone({ onImagesAdded, existingDimensions }: Upload
         </p>
 
         <span className="text-[10px] text-slate-500 mt-3 font-mono bg-slate-950 px-2 py-1 rounded border border-slate-800/80">
-          {existingDimensions 
-            ? `Active Project Lock: ${existingDimensions.width}x${existingDimensions.height} px` 
-            : 'Accepts: PNG, JPG, or WEBP of equal frame sizes'}
+          Accepts: PNG, JPG, or WEBP — auto-sorted by number in filename (e.g. 0001.png, 0033.png)
         </span>
       </div>
 

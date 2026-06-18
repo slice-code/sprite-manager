@@ -1,0 +1,16 @@
+services:
+  sprite-manager:
+    build: .
+    container_name: sprite-sheet-manager
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+    volumes:
+      - sprite-data:/app/data
+    ports:
+      # UI only — Express serves frontend + /api + /uploads on the same internal port
+      - "3000:3001"
+
+volumes:
+  sprite-data:

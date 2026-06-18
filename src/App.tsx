@@ -5,11 +5,21 @@ import {
   Download, Sparkles, Star, Archive, RefreshCw, FileText, 
   ArrowLeft, Upload, Grid3X3, Layers, Settings, ChevronRight, 
   Calendar, Check, X, FileJson, Copy, Bookmark, Database, Image as ImageIcon,
-  CheckSquare, Square, Inbox, Heart, Info, MoveLeft, MoveRight, HelpCircle, AlertCircle
+  CheckSquare, Square, Inbox, Heart, Info, MoveLeft, MoveRight, HelpCircle, AlertCircle,
+  FlipHorizontal
 } from 'lucide-react';
-import { db, seedDatabase, Project, Category, ProjectImage, ProjectSheet } from './db';
-import AnimationPreview from './components/AnimationPreview';
+import {
+  seedDatabase, getProjects, getCategories, getAllTagNames, getProject,
+  getProjectImages, getProjectSheets, getProjectTags, updateProject,
+  createProject, deleteProject, duplicateProject, addProjectImages,
+  updateProjectImage, deleteProjectImage, selectAllProjectImages,
+  swapProjectImages, saveProjectSheet, addProjectTag, removeProjectTag, dataUrlToBlob,
+  sortProjectImagesByName,
+  type Project, type Category, type ProjectImage, type ProjectSheet
+} from './api';
+import { compareNumericFilenames } from './utils/fileSort';
 import UploadZone from './components/UploadZone';
+import AnimationPreview from './components/AnimationPreview';
 import { 
   generateJSONExport, generateXMLExport, generateUnityExport, 
   generateGodotExport, generatePhaserExport, FrameCoord 
@@ -55,6 +65,7 @@ export default function App() {
   const [editorSheets, setEditorSheets] = useState<ProjectSheet[]>([]);
   const [editorTags, setEditorTags] = useState<string[]>([]);
   const [newTagInput, setNewTagInput] = useState('');
+  const [uploadingImages, setUploadingImages] = useState(false);
   
   // Dimensions & Resize states
   const [frameWidth, setFrameWidth] = useState(64);
@@ -88,13 +99,11 @@ export default function App() {
   // Fetch lists from IndexedDB
   const reloadAllData = async () => {
     try {
-      const allProjects = await db.projects.toArray();
-      const allCategories = await db.categories.toArray();
-      const allTagJoins = await db.projectTags.toArray();
-      
-      // Extract unique tags list
-      const uniqueTags = Array.from(new Set(allTagJoins.map(t => t.tagName)));
-      
+      const [allProjects, allCategories, uniqueTags] = await Promise.all([
+        getProjects(),
+        getCategories(),
+        getAllTagNames(),
+      ]);
       setProjects(allProjects);
       setCategories(allCategories);
       setTags(uniqueTags);
@@ -107,7 +116,7 @@ export default function App() {
 
   // Keep project tags synced
   const reloadProjectTags = async (projId: number) => {
-    const records = await db.projectTags.where('projectId').equals(projId).toArray();
+    const records = await getProjectTags(projId);
     setEditorTags(records.map(r => r.tagName));
   };
 
@@ -123,24 +132,16 @@ export default function App() {
       }
 
       try {
-        const proj = await db.projects.get(currentProjectId);
+        const proj = await getProject(currentProjectId);
         if (!proj) {
           setCurrentProjectId(null);
           return;
         }
 
-        // Get images ordered
-        const images = await db.projectImages
-          .where('projectId')
-          .equals(currentProjectId)
-          .sortBy('sortOrder');
-
-        // Get history sheets
-        const sheets = await db.projectSheets
-          .where('projectId')
-          .equals(currentProjectId)
-          .reverse()
-          .sortBy('version');
+        const [images, sheets] = await Promise.all([
+          getProjectImages(currentProjectId),
+          getProjectSheets(currentProjectId),
+        ]);
 
         setCurrentProject(proj);
         setEditorImages(images);
@@ -148,7 +149,6 @@ export default function App() {
         setFrameWidth(proj.frameWidth || 64);
         setFrameHeight(proj.frameHeight || 64);
         
-        // Calculate original aspect ratio from first image
         if (images.length > 0) {
           const img = new Image();
           img.onload = () => {
@@ -161,9 +161,8 @@ export default function App() {
 
         await reloadProjectTags(currentProjectId);
 
-        // Update recently opened updatedAt field
-        await db.projects.update(currentProjectId, { updatedAt: Date.now() });
-        const allProj = await db.projects.toArray();
+        await updateProject(currentProjectId, { updatedAt: Date.now() });
+        const allProj = await getProjects();
         setProjects(allProj);
 
       } catch (err) {
@@ -261,8 +260,8 @@ export default function App() {
     // Traverse details
     projects.forEach(p => {
       totalFrames += p.frameCount || 0;
-      if (p.version) {
-        totalGeneratedSheets += p.version;
+      if (p.version && p.version > 0) {
+        totalGeneratedSheets += 1;
       }
     });
 
@@ -303,72 +302,54 @@ export default function App() {
   };
 
   // Add multiple uploaded images to the active project
-  const handleAddImages = async (newImages: { imageSrc: string; fileName: string; width: number; height: number }[]) => {
-    if (!currentProjectId || !currentProject) return;
+  const syncResizeFromDimensions = (width: number, height: number) => {
+    setFrameWidth(width);
+    setFrameHeight(height);
+    if (height > 0) {
+      setAspectRatio(width / height);
+    }
+  };
+
+  const handleAddImages = async (files: File[]) => {
+    if (!currentProjectId || !currentProject || files.length === 0) return;
 
     try {
-      const currentCount = editorImages.length;
-      
-      // Determine baseline aspect ratio if it was empty
-      if (currentCount === 0 && newImages.length > 0) {
-        setAspectRatio(newImages[0].width / newImages[0].height);
-        setFrameWidth(newImages[0].width);
-        setFrameHeight(newImages[0].height);
-        
-        // Save dimensions to project table immediately
-        await db.projects.update(currentProjectId, {
-          frameWidth: newImages[0].width,
-          frameHeight: newImages[0].height
-        });
-      }
+      setUploadingImages(true);
+      const { images, project: updatedProj } = await addProjectImages(currentProjectId, files);
 
-      // Bulk add
-      for (let i = 0; i < newImages.length; i++) {
-        const item = newImages[i];
-        await db.projectImages.add({
-          projectId: currentProjectId,
-          imageSrc: item.imageSrc,
-          fileName: item.fileName,
-          sortOrder: currentCount + i,
-          isSelected: true
-        });
-      }
+      setEditorImages(images);
+      setCurrentProject(updatedProj);
+      syncResizeFromDimensions(updatedProj.frameWidth, updatedProj.frameHeight);
 
-      // Auto update cover image if project had none
-      const activeProj = await db.projects.get(currentProjectId);
-      if (activeProj && (!activeProj.coverImage || activeProj.coverImage === '')) {
-        await db.projects.update(currentProjectId, {
-          coverImage: newImages[0].imageSrc
-        });
-      }
-
-      // Reload project frames from DB
-      await refreshEditorImages();
-      await syncProjectStatsAndDates();
+      await reloadAllData();
     } catch (e) {
-      console.error("Error bulk uploading images:", e);
+      console.error('Error bulk uploading images:', e);
+      alert(e instanceof Error ? e.message : 'Upload failed');
+    } finally {
+      setUploadingImages(false);
+    }
+  };
+
+  const handleSortImagesByName = async () => {
+    if (!currentProjectId) return;
+    try {
+      const imgs = await sortProjectImagesByName(currentProjectId);
+      setEditorImages(imgs);
+      await reloadAllData();
+    } catch (e) {
+      console.error('Failed to sort images:', e);
     }
   };
 
   const refreshEditorImages = async () => {
     if (!currentProjectId) return;
-    const imgs = await db.projectImages
-      .where('projectId')
-      .equals(currentProjectId)
-      .sortBy('sortOrder');
+    const imgs = await getProjectImages(currentProjectId);
     setEditorImages(imgs);
   };
 
   const syncProjectStatsAndDates = async () => {
     if (!currentProjectId || !currentProject) return;
-    const imgs = await db.projectImages.where('projectId').equals(currentProjectId).toArray();
-    
-    await db.projects.update(currentProjectId, {
-      frameCount: imgs.length,
-      updatedAt: Date.now()
-    });
-
-    const updatedProj = await db.projects.get(currentProjectId);
+    const updatedProj = await getProject(currentProjectId);
     if (updatedProj) {
       setCurrentProject(updatedProj);
     }
@@ -377,37 +358,20 @@ export default function App() {
 
   // Select / Deselect actions in active Grid Manager
   const handleImageSelectToggle = async (imageId: number, val: boolean) => {
-    await db.projectImages.update(imageId, { isSelected: val });
+    await updateProjectImage(imageId, { isSelected: val });
     await refreshEditorImages();
   };
 
   const handleSelectAllImages = async (val: boolean) => {
-    if (editorImages.length === 0) return;
-    for (const img of editorImages) {
-      if (img.id) {
-        await db.projectImages.update(img.id, { isSelected: val });
-      }
-    }
-    await refreshEditorImages();
+    if (!currentProjectId || editorImages.length === 0) return;
+    const imgs = await selectAllProjectImages(currentProjectId, val);
+    setEditorImages(imgs);
   };
 
   const handleDeleteImage = async (imageId: number) => {
-    await db.projectImages.delete(imageId);
+    await deleteProjectImage(imageId);
     await refreshEditorImages();
     await syncProjectStatsAndDates();
-
-    // Re-index remaining images sort orders
-    const remaining = await db.projectImages
-      .where('projectId')
-      .equals(currentProjectId!)
-      .sortBy('sortOrder');
-
-    for (let i = 0; i < remaining.length; i++) {
-      if (remaining[i].id) {
-        await db.projectImages.update(remaining[i].id!, { sortOrder: i });
-      }
-    }
-    await refreshEditorImages();
   };
 
   // Frame sequencing: Move Frame Left / Right
@@ -420,9 +384,13 @@ export default function App() {
     const targetImg = editorImages[targetIndex];
 
     if (currentImg.id && targetImg.id) {
-      // Swap sorting orders
-      await db.projectImages.update(currentImg.id, { sortOrder: targetImg.sortOrder });
-      await db.projectImages.update(targetImg.id, { sortOrder: currentImg.sortOrder });
+      await swapProjectImages(
+        currentProjectId!,
+        currentImg.id,
+        currentImg.sortOrder,
+        targetImg.id,
+        targetImg.sortOrder
+      );
       await refreshEditorImages();
     }
   };
@@ -432,48 +400,25 @@ export default function App() {
     if (newProjectName.trim() === '') return;
 
     try {
-      const now = Date.now();
-      const projId = await db.projects.add({
-        name: newProjectName,
-        description: newProjectDesc,
-        categoryId: newProjectCategory,
-        coverImage: '',
-        version: 0,
-        status: 'active',
-        frameWidth: 64,
-        frameHeight: 64,
-        frameCount: 0,
-        sheetWidth: 0,
-        sheetHeight: 0,
-        fps: 10,
-        isFavorite: false,
-        createdAt: now,
-        updatedAt: now
-      });
-
-      // Split and add tag joins
       const tagsToInsert = newProjectTagsInput
         .split(',')
         .map(t => t.trim().toLowerCase())
         .filter(t => t.length > 0);
 
-      for (const t of tagsToInsert) {
-        await db.projectTags.add({ projectId: projId, tagName: t });
-        // Add to main tags table as master index reference
-        const existsRef = await db.tags.where('name').equals(t).first();
-        if (!existsRef) {
-          await db.tags.add({ name: t });
-        }
-      }
+      const proj = await createProject({
+        name: newProjectName,
+        description: newProjectDesc,
+        categoryId: newProjectCategory,
+        tags: tagsToInsert,
+      });
 
-      // Close state and view immediately
       setNewProjectName('');
       setNewProjectDesc('');
       setNewProjectTagsInput('');
       setIsCreateModalOpen(false);
       
       await reloadAllData();
-      setCurrentProjectId(projId); // open editing view directly!
+      setCurrentProjectId(proj.id!);
     } catch (err) {
       console.error("Failed to build new project:", err);
     }
@@ -486,23 +431,12 @@ export default function App() {
       if (!currentProjectId) return;
       const cleanTag = newTagInput.trim().toLowerCase();
       
-      // Check if tag already exists on this project
-      const exists = await db.projectTags
-        .where('[projectId+tagName]')
-        .equals([currentProjectId, cleanTag])
-        .first();
-
-      if (!exists) {
-        await db.projectTags.add({ projectId: currentProjectId, tagName: cleanTag });
-        
-        // master index
-        const indexExists = await db.tags.where('name').equals(cleanTag).first();
-        if (!indexExists) {
-          await db.tags.add({ name: cleanTag });
-        }
-
+      try {
+        await addProjectTag(currentProjectId, cleanTag);
         await reloadProjectTags(currentProjectId);
         await reloadAllData();
+      } catch {
+        // tag may already exist
       }
       setNewTagInput('');
     }
@@ -510,22 +444,17 @@ export default function App() {
 
   const handleRemoveEditorTag = async (tagName: string) => {
     if (!currentProjectId) return;
-    const record = await db.projectTags
-      .where('[projectId+tagName]')
-      .equals([currentProjectId, tagName])
-      .first();
-
-    if (record && record.id) {
-      await db.projectTags.delete(record.id);
-      await reloadProjectTags(currentProjectId);
-      await reloadAllData();
-    }
+    await removeProjectTag(currentProjectId, tagName);
+    await reloadProjectTags(currentProjectId);
+    await reloadAllData();
   };
 
   // Interactive sprite sheet generation stitching engine
   const handleStitchSpriteSheet = async () => {
     if (!currentProject || !currentProjectId) return;
-    const selectedFrames = editorImages.filter(img => img.isSelected);
+    const selectedFrames = editorImages
+      .filter((img) => img.isSelected)
+      .sort((a, b) => compareNumericFilenames(a.fileName, b.fileName));
 
     if (selectedFrames.length === 0) {
       alert("No frames selected! Please checkmark at least one image frame to compile into a sheet.");
@@ -556,14 +485,26 @@ export default function App() {
           tempImgs[idx] = img;
 
           if (loadedCount === selectedFrames.length) {
-            // Draw all ordered onto canvas
+            const reverseCanvas = document.createElement('canvas');
+            reverseCanvas.width = sheetWidth;
+            reverseCanvas.height = sheetHeight;
+            const reverseCtx = reverseCanvas.getContext('2d');
+            if (!reverseCtx) return;
+            reverseCtx.imageSmoothingEnabled = false;
+
             tempImgs.forEach((itm, index) => {
               ctx.drawImage(itm, index * frameWidth, 0, frameWidth, frameHeight);
+
+              reverseCtx.save();
+              reverseCtx.translate((index + 1) * frameWidth, 0);
+              reverseCtx.scale(-1, 1);
+              reverseCtx.drawImage(itm, 0, 0, frameWidth, frameHeight);
+              reverseCtx.restore();
             });
 
-            // Trigger saving sequence
             triggerSaveSheetState(
               canvas.toDataURL('image/png'),
+              reverseCanvas.toDataURL('image/png'),
               sheetWidth,
               sheetHeight,
               selectedFrames.length
@@ -580,6 +521,7 @@ export default function App() {
 
   const triggerSaveSheetState = async (
     sheetDataUrl: string,
+    reverseDataUrl: string,
     sheetWidth: number,
     sheetHeight: number,
     finalFrameCount: number
@@ -587,45 +529,22 @@ export default function App() {
     if (!currentProjectId || !currentProject) return;
 
     try {
-      // Version numbering increments (starts at v1, then upwards)
-      const nextVersion = (currentProject.version || 0) + 1;
+      const sheetBlob = await dataUrlToBlob(sheetDataUrl);
+      const reverseBlob = await dataUrlToBlob(reverseDataUrl);
 
-      // 1. Save new history frame sheet entry to prevent over-writes (VERSIONING #12)
-      await db.projectSheets.add({
-        projectId: currentProjectId,
-        version: nextVersion,
-        sheetSrc: sheetDataUrl,
+      const { project: updatedProj, sheets: updatedSheets } = await saveProjectSheet(currentProjectId, {
+        sheetBlob,
+        reverseBlob,
         sheetWidth,
         sheetHeight,
         frameCount: finalFrameCount,
         frameWidth,
         frameHeight,
         fps: currentProject.fps || 10,
-        createdAt: Date.now()
       });
 
-      // 2. Update parent metadata
-      await db.projects.update(currentProjectId, {
-        version: nextVersion,
-        sheetWidth,
-        sheetHeight,
-        frameCount: finalFrameCount,
-        frameWidth,
-        frameHeight,
-        updatedAt: Date.now()
-      });
-
-      // Reload view states
-      const updatedProj = await db.projects.get(currentProjectId);
-      if (updatedProj) setCurrentProject(updatedProj);
-
-      const updatedSheets = await db.projectSheets
-        .where('projectId')
-        .equals(currentProjectId)
-        .reverse()
-        .sortBy('version');
+      setCurrentProject(updatedProj);
       setEditorSheets(updatedSheets);
-
       await reloadAllData();
     } catch (e) {
       console.error("Failed storing updated sprite sheet version:", e);
@@ -638,23 +557,7 @@ export default function App() {
     if (!ok) return;
 
     try {
-      await db.projects.delete(id);
-      
-      // Clean up linked tables
-      const imgIds = await db.projectImages.where('projectId').equals(id).primaryKeys();
-      for (const iId of imgIds) {
-        await db.projectImages.delete(iId);
-      }
-
-      const sheetIds = await db.projectSheets.where('projectId').equals(id).primaryKeys();
-      for (const sId of sheetIds) {
-        await db.projectSheets.delete(sId);
-      }
-
-      const tagJoins = await db.projectTags.where('projectId').equals(id).primaryKeys();
-      for (const tId of tagJoins) {
-        await db.projectTags.delete(tId);
-      }
+      await deleteProject(id);
 
       if (currentProjectId === id) {
         setCurrentProjectId(null);
@@ -676,7 +579,7 @@ export default function App() {
     if (!proj) return;
 
     const nextVal = !proj.isFavorite;
-    await db.projects.update(id, { isFavorite: nextVal });
+    await updateProject(id, { isFavorite: nextVal });
     await reloadAllData();
 
     if (currentProjectId === id && currentProject) {
@@ -692,60 +595,7 @@ export default function App() {
     if (!orig) return;
 
     try {
-      const now = Date.now();
-      const dupId = await db.projects.add({
-        name: `${orig.name} (Copy)`,
-        description: orig.description,
-        categoryId: orig.categoryId,
-        coverImage: orig.coverImage,
-        version: orig.version,
-        status: orig.status,
-        frameWidth: orig.frameWidth,
-        frameHeight: orig.frameHeight,
-        frameCount: orig.frameCount,
-        sheetWidth: orig.sheetWidth,
-        sheetHeight: orig.sheetHeight,
-        fps: orig.fps,
-        isFavorite: false,
-        createdAt: now,
-        updatedAt: now
-      });
-
-      // Clone tag joins
-      const tags = await db.projectTags.where('projectId').equals(id).toArray();
-      for (const t of tags) {
-        await db.projectTags.add({ projectId: dupId, tagName: t.tagName });
-      }
-
-      // Clone images
-      const imgs = await db.projectImages.where('projectId').equals(id).toArray();
-      for (const i of imgs) {
-        await db.projectImages.add({
-          projectId: dupId,
-          imageSrc: i.imageSrc,
-          fileName: i.fileName,
-          sortOrder: i.sortOrder,
-          isSelected: i.isSelected
-        });
-      }
-
-      // Clone sheets
-      const sheets = await db.projectSheets.where('projectId').equals(id).toArray();
-      for (const s of sheets) {
-        await db.projectSheets.add({
-          projectId: dupId,
-          version: s.version,
-          sheetSrc: s.sheetSrc,
-          sheetWidth: s.sheetWidth,
-          sheetHeight: s.sheetHeight,
-          frameCount: s.frameCount,
-          frameWidth: s.frameWidth,
-          frameHeight: s.frameHeight,
-          fps: s.fps,
-          createdAt: s.createdAt
-        });
-      }
-
+      await duplicateProject(id);
       await reloadAllData();
     } catch (err) {
       console.error("Failed to duplicate project:", err);
@@ -762,7 +612,7 @@ export default function App() {
     if (!orig) return;
 
     const nextStatus = orig.status === 'archived' ? 'active' : 'archived';
-    await db.projects.update(id, { status: nextStatus, updatedAt: Date.now() });
+    await updateProject(id, { status: nextStatus, updatedAt: Date.now() });
     await reloadAllData();
 
     if (currentProjectId === id && currentProject) {
@@ -773,7 +623,7 @@ export default function App() {
   // FPS editing tracker
   const handleEditorFpsChange = async (newFps: number) => {
     if (!currentProjectId || !currentProject) return;
-    await db.projects.update(currentProjectId, { fps: newFps });
+    await updateProject(currentProjectId, { fps: newFps });
     setCurrentProject({ ...currentProject, fps: newFps });
     await reloadAllData();
   };
@@ -795,16 +645,7 @@ export default function App() {
     if (!ok) return;
 
     for (const id of selected) {
-      await db.projects.delete(id);
-      
-      const imgIds = await db.projectImages.where('projectId').equals(id).primaryKeys();
-      for (const iId of imgIds) await db.projectImages.delete(iId);
-
-      const sheetIds = await db.projectSheets.where('projectId').equals(id).primaryKeys();
-      for (const sId of sheetIds) await db.projectSheets.delete(sId);
-
-      const tagJoins = await db.projectTags.where('projectId').equals(id).primaryKeys();
-      for (const tId of tagJoins) await db.projectTags.delete(tId);
+      await deleteProject(id);
     }
 
     setBulkSelectedIds({});
@@ -816,7 +657,7 @@ export default function App() {
     if (selected.length === 0) return;
 
     for (const id of selected) {
-      await db.projects.update(id, { status: 'archived', updatedAt: Date.now() });
+      await updateProject(id, { status: 'archived', updatedAt: Date.now() });
     }
 
     setBulkSelectedIds({});
@@ -833,15 +674,10 @@ export default function App() {
       if (!proj) continue;
 
       // Find the latest sheet
-      const latestSheet = await db.projectSheets
-        .where('projectId')
-        .equals(id)
-        .reverse()
-        .sortBy('version');
+      const latestSheet = await getProjectSheets(id);
 
       if (latestSheet && latestSheet.length > 0) {
-        // Trigger file download
-        const filename = `${proj.name.toLowerCase().replace(/\s+/g, '_')}_v${proj.version}_sheet.png`;
+        const filename = `${proj.name.toLowerCase().replace(/\s+/g, '_')}_sheet.png`;
         setTimeout(() => {
           const a = document.createElement('a');
           a.href = latestSheet[0].sheetSrc;
@@ -916,10 +752,13 @@ export default function App() {
   };
 
   // Single sheet download target helper
-  const handleDownloadSingleSheet = (sheet: ProjectSheet, name: string) => {
-    const filename = `${name.toLowerCase().replace(/\s+/g, '_')}_v${sheet.version}_sheet.png`;
+  const handleDownloadSingleSheet = (sheet: ProjectSheet, name: string, reversed = false) => {
+    const src = reversed ? sheet.reverseSheetSrc : sheet.sheetSrc;
+    if (!src) return;
+    const suffix = reversed ? '_reverse' : '';
+    const filename = `${name.toLowerCase().replace(/\s+/g, '_')}_sheet${suffix}.png`;
     const a = document.createElement('a');
-    a.href = sheet.sheetSrc;
+    a.href = src;
     a.download = filename;
     document.body.appendChild(a);
     a.click();
@@ -944,7 +783,7 @@ export default function App() {
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-4 text-xs font-medium text-slate-400">
             <span className="text-[11px] font-mono text-slate-500 bg-slate-950 px-2.5 py-1 rounded border border-slate-800 hidden md:inline">
-              IndexedDB Storage active
+              SQLite + File Storage
             </span>
             {currentProjectId !== null && (
               <button
@@ -963,8 +802,8 @@ export default function App() {
         {loading ? (
           <div className="flex flex-col items-center justify-center py-20 text-slate-400">
             <RefreshCw className="w-9 h-9 animate-spin text-indigo-500 mb-4" />
-            <h2 className="text-sm font-semibold text-slate-300">Synchronizing database structure...</h2>
-            {seedInProgress && <span className="text-xs text-slate-500 mt-1">Generating cool pixel art demo models...</span>}
+            <h2 className="text-sm font-semibold text-slate-300">Connecting to server...</h2>
+            {seedInProgress && <span className="text-xs text-slate-500 mt-1">Initializing SQLite database...</span>}
           </div>
         ) : (
           <>
@@ -1310,8 +1149,10 @@ export default function App() {
                                   <span className="font-mono text-[11px] font-semibold text-slate-200">{p.frameCount || 0} slots</span>
                                 </div>
                                 <div className="flex flex-col text-right">
-                                  <span className="text-[8px] font-mono uppercase tracking-wider text-slate-500">Stitched v</span>
-                                  <span className="font-mono text-[11px] font-semibold text-emerald-400">v{p.version || 0}</span>
+                                  <span className="text-[8px] font-mono uppercase tracking-wider text-slate-500">Sheet</span>
+                                  <span className="font-mono text-[11px] font-semibold text-emerald-400">
+                                    {p.version > 0 ? 'Ready' : '—'}
+                                  </span>
                                 </div>
                               </div>
 
@@ -1474,36 +1315,6 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Version History panel (#12 Versioning) */}
-                    {editorSheets.length > 0 && (
-                      <div className="bg-slate-900/30 border border-slate-800 p-4 rounded-lg flex flex-col gap-3">
-                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">History Sheets</label>
-
-                        <div className="flex flex-col gap-2 max-h-80 overflow-y-auto pr-1">
-                          {editorSheets.map((sheet) => (
-                            <div
-                              key={sheet.id}
-                              className="bg-slate-950 p-2.5 border border-slate-900 hover:border-slate-800 rounded flex items-center justify-between gap-2.5 transition"
-                            >
-                              <div className="flex flex-col min-w-0">
-                                <span className="font-mono text-[11px] font-bold text-slate-200">v{sheet.version}</span>
-                                <span className="text-[9px] font-mono text-slate-500 truncate">
-                                  {sheet.frameCount} frames • {sheet.sheetWidth}x{sheet.sheetHeight}px
-                                </span>
-                              </div>
-
-                              <button
-                                onClick={() => handleDownloadSingleSheet(sheet, currentProject?.name || 'sheet')}
-                                className="p-1 px-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-slate-300 hover:text-emerald-400 transition cursor-pointer shrink-0"
-                                title="Download"
-                              >
-                                <Download className="w-3 h-3" />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
                   </div>
 
                   {/* Center Column - Canvas & Grid Frame Manager (lg:col-span-6) */}
@@ -1513,12 +1324,8 @@ export default function App() {
                     <div className="bg-slate-950 border border-slate-900 p-4 rounded-lg flex flex-col gap-3">
                       <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block animate-none">Add Images</label>
                       <UploadZone
-                        onImagesAdded={handleAddImages}
-                        existingDimensions={
-                          editorImages.length > 0 
-                            ? { width: frameWidth, height: frameHeight } 
-                            : null
-                        }
+                        onFilesSelected={handleAddImages}
+                        uploading={uploadingImages}
                       />
                     </div>
 
@@ -1530,7 +1337,15 @@ export default function App() {
                         </label>
 
                         {/* Selection aids */}
-                        <div className="flex items-center gap-2 text-[10px]">
+                        <div className="flex items-center gap-2 text-[10px] flex-wrap justify-end">
+                          <button
+                            onClick={handleSortImagesByName}
+                            className="text-amber-400 hover:underline cursor-pointer"
+                            title="Sort frames by number in filename (0001 → 0033)"
+                          >
+                            Auto Sort
+                          </button>
+                          <span className="text-slate-850">|</span>
                           <button
                             onClick={() => handleSelectAllImages(true)}
                             className="text-indigo-400 hover:underline cursor-pointer"
@@ -1688,7 +1503,63 @@ export default function App() {
                       >
                         Create Sprite Sheet
                       </button>
+                      {editorSheets.length > 0 && (
+                        <p className="text-[9px] text-slate-500 text-center">
+                          Regenerating replaces the previous sprite sheet.
+                        </p>
+                      )}
                     </div>
+
+                    {editorSheets.length > 0 && (
+                      <div className="p-3 bg-indigo-500/5 rounded border border-indigo-500/20 flex flex-col gap-3">
+                        <div className="flex justify-between items-center">
+                          <span className="text-[10px] font-bold text-indigo-400 uppercase">Output Preview</span>
+                          <span className="text-[9px] text-slate-500 font-mono truncate max-w-[140px]">
+                            {currentProject?.name.toLowerCase().replace(/\s+/g, '_')}_sheet.png
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="flex flex-col gap-1.5">
+                            <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider text-center">Facing Right</span>
+                            <div className="h-20 bg-slate-950 rounded border border-slate-800 flex items-center justify-center p-1.5 transparent-grid overflow-hidden">
+                              <img
+                                src={editorSheets[0]?.sheetSrc}
+                                alt="Sprite sheet facing right"
+                                className="max-h-full max-w-full pixelated object-contain"
+                              />
+                            </div>
+                          </div>
+                          <div className="flex flex-col gap-1.5">
+                            <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider text-center">Facing Left (Reverse)</span>
+                            <div className="h-20 bg-slate-950 rounded border border-slate-800 flex items-center justify-center p-1.5 transparent-grid overflow-hidden">
+                              <img
+                                src={editorSheets[0]?.reverseSheetSrc || editorSheets[0]?.sheetSrc}
+                                alt="Sprite sheet facing left"
+                                className="max-h-full max-w-full pixelated object-contain"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() => handleDownloadSingleSheet(editorSheets[0], currentProject?.name || 'sheet', false)}
+                          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-2.5 rounded-md text-sm font-bold transition-colors shadow-lg shadow-emerald-900/25 active:scale-[0.98] flex items-center justify-center gap-2 cursor-pointer"
+                        >
+                          <Download className="w-4 h-4" />
+                          Download Sprite Sheet — Facing Right
+                        </button>
+
+                        <button
+                          onClick={() => handleDownloadSingleSheet(editorSheets[0], currentProject?.name || 'sheet', true)}
+                          disabled={!editorSheets[0]?.reverseSheetSrc}
+                          className="w-full bg-violet-600 hover:bg-violet-500 text-white py-2.5 rounded-md text-sm font-bold transition-colors shadow-lg shadow-violet-900/25 active:scale-[0.98] flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
+                        >
+                          <FlipHorizontal className="w-4 h-4" />
+                          Download Sprite Sheet — Facing Left (Reverse)
+                        </button>
+                      </div>
+                    )}
 
                     {/* Exporters specifications report */}
                     {editorSheets.length > 0 && (
@@ -1759,31 +1630,14 @@ export default function App() {
                       </div>
                     )}
 
-                    {/* Output Preview mock wrapper matching layout */}
-                    {editorSheets.length > 0 && (
-                      <div className="p-3 bg-indigo-500/5 rounded border border-indigo-500/20">
-                        <div className="flex justify-between items-center mb-2">
-                          <span className="text-[10px] font-bold text-indigo-400 uppercase">Output Preview</span>
-                          <span className="text-[9px] text-slate-500 font-mono truncate max-w-[120px]">
-                            {currentProject?.name.toLowerCase().replace(/\s+/g, '_')}_sheet.png
-                          </span>
-                        </div>
-                        <div className="h-8 w-full bg-slate-800 rounded border border-slate-700 flex items-center justify-center p-1">
-                          <div className="flex gap-0.5 h-5 opacity-40 overflow-hidden max-w-full">
-                            {Array.from({ length: Math.min(6, editorSheets[0]?.frameCount || 1) }).map((_, i) => (
-                              <div key={i} className="w-5 h-full bg-indigo-400 rounded-sm"></div>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
                     {/* Animation live preview player box (placed at the bottom of Right Column) */}
                     <AnimationPreview
                       sheetSrc={editorSheets[0]?.sheetSrc || ''}
                       frameCount={editorSheets[0]?.frameCount || 0}
                       frameWidth={editorSheets[0]?.frameWidth || 64}
                       frameHeight={editorSheets[0]?.frameHeight || 64}
+                      sheetWidth={editorSheets[0]?.sheetWidth}
+                      sheetHeight={editorSheets[0]?.sheetHeight}
                       initialFps={currentProject?.fps || 10}
                       onFpsChange={handleEditorFpsChange}
                     />
@@ -1801,7 +1655,7 @@ export default function App() {
       {/* FOOTER */}
       <footer className="border-t border-slate-900 mt-20 bg-slate-950 py-10 text-center text-xs text-slate-500">
         <div className="max-w-7xl mx-auto px-4 flex flex-col md:flex-row justify-between items-center gap-4">
-          <p>© 2026 Sprite Sheet Manager. Runs entirely on sandboxed browser memory (Dexie client IndexedDB).</p>
+          <p>© 2026 Sprite Sheet Manager. Data stored in SQLite; images and sprite sheets saved to disk.</p>
           <div className="flex gap-4">
             <a href="#" className="hover:text-slate-300">Unity Companion</a>
             <span>•</span>
