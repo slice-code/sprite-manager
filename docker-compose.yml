@@ -6,11 +6,13 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3001
+      BIND_HOST: 127.0.0.1
+      SERVE_STATIC: "false"
     volumes:
       - sprite-data:/app/data
     ports:
-      # UI only — Express serves frontend + /api + /uploads on the same internal port
-      - "3000:3001"
+      # Frontend only (nginx :80). Backend API is internal via nginx proxy.
+      - "3000:80"
 
 volumes:
   sprite-data:

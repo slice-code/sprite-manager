@@ -50,7 +50,12 @@ Sheet metadata fields: `sheetWidth`, `sheetHeight`, `frameCount`, `frameWidth`, 
 
 ## Docker
 
-Backend (API, SQLite, file storage) runs inside the container on port **3001** and is **not** published separately. Only the web UI is exposed to the host.
+Satu container menjalankan **nginx (frontend)** + **Node API (backend)**. Hanya frontend yang di-expose ke host.
+
+```
+Browser :3000 → nginx :80 (UI)
+                  └─ proxy /api, /uploads → Node :3001 (internal, tidak di-expose)
+```
 
 ```bash
 docker compose up --build -d
@@ -61,12 +66,14 @@ Open http://localhost:3000
 Data persists in the `sprite-data` Docker volume (`/app/data` in the container).
 
 ```bash
-docker compose down        # stop
-docker compose logs -f     # view logs
+docker compose down
+docker compose logs -f
 ```
 
 ## Environment
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `3001` | API and file server port |
+| `PORT` | `3001` | API server port |
+| `BIND_HOST` | `0.0.0.0` | API bind address (`127.0.0.1` in Docker) |
+| `SERVE_STATIC` | `true` | Set `false` when nginx serves the UI |

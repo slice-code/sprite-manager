@@ -503,9 +503,13 @@ app.post(
   });
 });
 
-// --- Production static ---
+// --- Production static (skipped in Docker — nginx serves frontend) ---
 const distPath = path.join(__dirname, '..', 'dist');
-app.use(express.static(distPath));
+const serveStatic = process.env.SERVE_STATIC !== 'false';
+
+if (serveStatic) {
+  app.use(express.static(distPath));
+}
 
 app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
   if (err instanceof multer.MulterError) {
@@ -517,21 +521,27 @@ app.use((err: unknown, _req: express.Request, res: express.Response, next: expre
   next(err);
 });
 
-app.get('*', (req, res, next) => {
-  if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) return next();
-  res.sendFile(path.join(distPath, 'index.html'), (err) => {
-    if (err) next();
+if (serveStatic) {
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) return next();
+    res.sendFile(path.join(distPath, 'index.html'), (err) => {
+      if (err) next();
+    });
   });
-});
+}
 
 async function start() {
   try {
     getDb();
     await seedDatabase();
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`Server running on http://localhost:${PORT}`);
+    const host = process.env.BIND_HOST || '0.0.0.0';
+    app.listen(PORT, host, () => {
+      console.log(`Server running on http://${host}:${PORT}`);
       console.log(`SQLite DB: ${path.join(process.cwd(), 'data', 'sprite-manager.db')}`);
       console.log(`Uploads: ${UPLOADS_DIR}`);
+      if (!serveStatic) {
+        console.log('Static UI disabled — use reverse proxy for frontend');
+      }
     });
   } catch (err) {
     console.error('Failed to start server:', err);
