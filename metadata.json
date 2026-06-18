@@ -1,0 +1,6 @@
+{
+  "name": "Sprite Sheet Manager",
+  "description": "An advanced, high-performance editor and manager for creating, organizing, animating, and downloading 2D game sprite sheets.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
