@@ -56,15 +56,14 @@ export default function AnimationPreview({
   }, [sheetSrc]);
 
   const metrics = useMemo(() => {
-    const count = Math.max(1, frameCount);
-    const cols = 4;
-    const rows = Math.max(4, Math.ceil(count / cols));
-    const sheetW = naturalSize?.w || sheetWidth || frameWidth * cols;
-    const sheetH = naturalSize?.h || sheetHeight || frameHeight * rows;
-    const fw = naturalSize ? Math.round(sheetW / cols) : frameWidth;
-    const fh = naturalSize ? Math.round(sheetH / rows) : frameHeight;
+    const fw = frameWidth > 0 ? frameWidth : 64;
+    const fh = frameHeight > 0 ? frameHeight : 64;
+    const sheetW = naturalSize?.w || sheetWidth || fw * 4;
+    const sheetH = naturalSize?.h || sheetHeight || fh * Math.max(4, Math.ceil(frameCount / 4));
+    const colsCount = Math.max(1, Math.round(sheetW / fw));
+    const rowsCount = Math.max(1, Math.round(sheetH / fh));
     const scale = computeIntegerScale(fw, fh);
-    return { fw, fh, sheetW, sheetH, scale, count, cols };
+    return { fw, fh, sheetW, sheetH, scale, colsCount, rowsCount };
   }, [naturalSize, sheetWidth, sheetHeight, frameWidth, frameHeight, frameCount]);
 
   useEffect(() => {
@@ -112,15 +111,12 @@ export default function AnimationPreview({
 
   const hasAnimation = Boolean(sheetSrc && frameCount > 0 && naturalSize);
 
-  const viewportW = metrics.fw * metrics.scale;
-  const viewportH = metrics.fh * metrics.scale;
-  const sheetDisplayW = metrics.sheetW * metrics.scale;
-  const sheetDisplayH = metrics.sheetH * metrics.scale;
-  
-  const col = currentFrame % metrics.cols;
-  const row = Math.floor(currentFrame / metrics.cols);
-  const offsetX = col * metrics.fw * metrics.scale;
-  const offsetY = row * metrics.fh * metrics.scale;
+  const colsCount = metrics.colsCount;
+  const rowsCount = metrics.rowsCount;
+  const col = currentFrame % colsCount;
+  const row = Math.floor(currentFrame / colsCount);
+  const translateX = colsCount > 0 ? - (col * 100) / colsCount : 0;
+  const translateY = rowsCount > 0 ? - (row * 100) / rowsCount : 0;
 
   return (
     <div className="bg-slate-900/40 border border-slate-800 rounded-lg p-4 flex flex-col gap-4">
@@ -133,11 +129,15 @@ export default function AnimationPreview({
         </span>
       </div>
 
-      <div className="relative h-60 bg-slate-950 rounded flex items-center justify-center overflow-hidden transparent-grid border border-slate-900">
+      <div className="relative h-60 bg-slate-950 rounded flex items-center justify-center overflow-hidden transparent-grid border border-slate-900 p-2">
         {hasAnimation ? (
           <div
-            className="relative shrink-0 overflow-hidden"
-            style={{ width: viewportW, height: viewportH }}
+            className="relative overflow-hidden max-w-full max-h-full"
+            style={{
+              aspectRatio: `${metrics.fw} / ${metrics.fh}`,
+              width: metrics.fw > metrics.fh ? '100%' : 'auto',
+              height: metrics.fw > metrics.fh ? 'auto' : '100%',
+            }}
           >
             <img
               src={sheetSrc}
@@ -145,9 +145,12 @@ export default function AnimationPreview({
               draggable={false}
               className="pixelated absolute top-0 left-0 max-w-none select-none"
               style={{
-                width: sheetDisplayW,
-                height: sheetDisplayH,
-                transform: `translate3d(-${offsetX}px, -${offsetY}px, 0)`,
+                width: `${colsCount * 100}%`,
+                height: `${rowsCount * 100}%`,
+                maxWidth: 'none',
+                maxHeight: 'none',
+                transform: `translate3d(${translateX}%, ${translateY}%, 0)`,
+                transition: 'none',
                 willChange: 'transform',
               }}
             />

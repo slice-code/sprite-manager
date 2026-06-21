@@ -38,6 +38,9 @@ export default function App() {
 
   // Filter & Search States
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchTags, setSearchTags] = useState<string[]>([]);
+  const [debouncedSearchTerms, setDebouncedSearchTerms] = useState<string[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [activeCategoryFilter, setActiveCategoryFilter] = useState<number | null>(null);
   const [activeTagFilter, setActiveTagFilter] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<'active' | 'archived' | 'all'>('active');
@@ -51,6 +54,19 @@ export default function App() {
 
   // Bulk operation states
   const [bulkSelectedIds, setBulkSelectedIds] = useState<Record<number, boolean>>({});
+
+  // Stats state
+  const [stats, setStats] = useState({
+    totalProjectsCount: 0,
+    activeProjectsCount: 0,
+    favoriteCount: 0,
+    totalFrames: 0,
+    totalGeneratedSheets: 0,
+  });
+
+  // Fetch trigger counter
+  const [refreshCounter, setRefreshCounter] = useState(0);
+  const refreshProjects = () => setRefreshCounter(prev => prev + 1);
 
   // Trigger Creation Modal state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -79,6 +95,48 @@ export default function App() {
   const [exportedString, setExportedString] = useState('');
   const [isCustomDimensionsWarning, setIsCustomDimensionsWarning] = useState(false);
 
+  // Compute active search terms (including pending searchQuery)
+  const activeSearchTerms = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (q === '') return searchTags;
+    if (searchTags.includes(q)) return searchTags;
+    return [...searchTags, q];
+  }, [searchQuery, searchTags]);
+
+  // Debounce active search terms
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearchTerms(activeSearchTerms);
+    }, 300);
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [activeSearchTerms]);
+
+  // Fetch filtered projects and stats
+  useEffect(() => {
+    const fetchFilteredProjects = async () => {
+      try {
+        setSearchLoading(true);
+        const response = await getProjects({
+          search: debouncedSearchTerms,
+          categoryId: activeCategoryFilter,
+          status: statusFilter,
+          isFavorite: showFavoritesOnly,
+          sortBy: sortBy,
+          frameCount: frameCountFilter,
+        });
+        setProjects(response.projects);
+        setStats(response.stats);
+      } catch (err) {
+        console.error("Failed to fetch filtered projects:", err);
+      } finally {
+        setSearchLoading(false);
+      }
+    };
+    fetchFilteredProjects();
+  }, [debouncedSearchTerms, activeCategoryFilter, statusFilter, showFavoritesOnly, sortBy, frameCountFilter, refreshCounter]);
+
   // Initial load
   useEffect(() => {
     const initApp = async () => {
@@ -100,14 +158,13 @@ export default function App() {
   // Fetch lists from IndexedDB
   const reloadAllData = async () => {
     try {
-      const [allProjects, allCategories, uniqueTags] = await Promise.all([
-        getProjects(),
+      const [allCategories, uniqueTags] = await Promise.all([
         getCategories(),
         getAllTagNames(),
       ]);
-      setProjects(allProjects);
       setCategories(allCategories);
       setTags(uniqueTags);
+      refreshProjects();
     } catch (e) {
       console.error("Failed to read database records:", e);
     } finally {
@@ -163,8 +220,16 @@ export default function App() {
         await reloadProjectTags(currentProjectId);
 
         await updateProject(currentProjectId, { updatedAt: Date.now() });
-        const allProj = await getProjects();
-        setProjects(allProj);
+        const response = await getProjects({
+          search: activeSearchTerms,
+          categoryId: activeCategoryFilter,
+          status: statusFilter,
+          isFavorite: showFavoritesOnly,
+          sortBy: sortBy,
+          frameCount: frameCountFilter,
+        });
+        setProjects(response.projects);
+        setStats(response.stats);
 
       } catch (err) {
         console.error("Failed to load project details:", err);
@@ -180,65 +245,8 @@ export default function App() {
     }
   }, [editorImages, aspectRatio]);
 
-  // Multi-filtering logic for dashboard
-  const filteredProjects = useMemo(() => {
-    let list = [...projects];
-
-    // Status Filter (Active / Archived / All)
-    if (statusFilter === 'active') {
-      list = list.filter(p => p.status === 'active');
-    } else if (statusFilter === 'archived') {
-      list = list.filter(p => p.status === 'archived');
-    }
-
-    // Favorite Filter
-    if (showFavoritesOnly) {
-      list = list.filter(p => p.isFavorite);
-    }
-
-    // Category Filter
-    if (activeCategoryFilter !== null) {
-      list = list.filter(p => p.categoryId === activeCategoryFilter);
-    }
-
-    // Tag Filter
-    if (activeTagFilter !== null) {
-      // We can check matches asynchronously, but for fast clientside index:
-      // We check if the project has projectTags relation. Let's lookup via an async-mapped static lookup or direct filter.
-      // Since project list is small/medium, we can query relations or we can do filter with joined project tags:
-    }
-
-    // Frame Count Filter
-    if (frameCountFilter !== null) {
-      list = list.filter(p => p.frameCount === frameCountFilter);
-    }
-
-    // Keyword Search (Project Name, Category, Tags, Frame Size specs)
-    if (searchQuery.trim() !== '') {
-      const q = searchQuery.toLowerCase().trim();
-      list = list.filter(p => {
-        const catName = categories.find(c => c.id === p.categoryId)?.name.toLowerCase() || '';
-        const sizeStr = `${p.frameWidth}x${p.frameHeight}`;
-        return (
-          p.name.toLowerCase().includes(q) ||
-          p.description.toLowerCase().includes(q) ||
-          catName.includes(q) ||
-          sizeStr.includes(q)
-        );
-      });
-    }
-
-    // Apply Sorting
-    list.sort((a, b) => {
-      if (sortBy === 'updated') return b.updatedAt - a.updatedAt;
-      if (sortBy === 'created') return b.createdAt - a.createdAt;
-      if (sortBy === 'name') return a.name.localeCompare(b.name);
-      if (sortBy === 'frames') return b.frameCount - a.frameCount;
-      return 0;
-    });
-
-    return list;
-  }, [projects, statusFilter, showFavoritesOnly, activeCategoryFilter, activeTagFilter, frameCountFilter, searchQuery, sortBy, categories]);
+  // Multi-filtering is done server-side; we assign the fetched projects directly
+  const filteredProjects = projects;
 
   // Paginated Projects
   const paginatedProjects = useMemo(() => {
@@ -247,33 +255,6 @@ export default function App() {
   }, [filteredProjects, currentPage]);
 
   const totalPages = Math.ceil(filteredProjects.length / itemsPerPage) || 1;
-
-  // Global counts for Dashboard stats widgets
-  const stats = useMemo(() => {
-    const totalProjectsCount = projects.length;
-    const activeProjectsCount = projects.filter(p => p.status === 'active').length;
-    const favoriteCount = projects.filter(p => p.isFavorite).length;
-
-    let totalFrames = 0;
-    let totalGeneratedSheets = 0;
-    let totalEstimatedStorageBytes = 0; // estimate based on base64 lengths
-
-    // Traverse details
-    projects.forEach(p => {
-      totalFrames += p.frameCount || 0;
-      if (p.version && p.version > 0) {
-        totalGeneratedSheets += 1;
-      }
-    });
-
-    return {
-      totalProjectsCount,
-      activeProjectsCount,
-      favoriteCount,
-      totalFrames,
-      totalGeneratedSheets,
-    };
-  }, [projects]);
 
   // Handle Resize Settings changes
   const handleWidthChange = (val: number) => {
@@ -904,14 +885,53 @@ export default function App() {
                     
                     {/* Search field */}
                     <div className="relative flex-1">
-                      <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                      <input
-                        type="text"
-                        placeholder="Search workspace by project name, category, or dimensions (e.g. 64x64)..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-800 hover:border-slate-700/80 focus:border-indigo-600 rounded-xl pl-10 pr-4 py-2.5 text-sm placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-600 transition"
-                      />
+                      <div className="flex flex-wrap items-center gap-2 bg-slate-950 border border-slate-800 hover:border-slate-700/80 focus-within:border-indigo-600 focus-within:ring-1 focus-within:ring-indigo-600 rounded-xl px-3 py-1.5 transition w-full">
+                        <div className="flex items-center gap-1.5 text-slate-400 shrink-0 pl-1">
+                          {searchLoading ? (
+                            <RefreshCw className="w-4 h-4 text-indigo-400 animate-spin" />
+                          ) : (
+                            <Search className="w-4 h-4" />
+                          )}
+                        </div>
+                        {searchTags.map((tag) => (
+                          <div
+                            key={tag}
+                            className="flex items-center gap-1.5 bg-slate-900 border border-slate-800/80 rounded-full px-2.5 py-0.5 text-xs text-indigo-300 font-semibold transition"
+                          >
+                            <Search className="w-2.5 h-2.5 text-slate-500" />
+                            <span>{tag}</span>
+                            <button
+                              onClick={() => {
+                                setSearchTags(searchTags.filter((t) => t !== tag));
+                                setCurrentPage(1);
+                              }}
+                              className="text-slate-500 hover:text-rose-400 rounded-full transition-colors cursor-pointer flex items-center justify-center p-0.5"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                        <input
+                          type="text"
+                          placeholder={searchTags.length === 0 ? "Search workspace... (Press Enter to add tag)" : "Add search term..."}
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              const trimmed = searchQuery.trim().toLowerCase();
+                              if (trimmed && !searchTags.includes(trimmed)) {
+                                setSearchTags([...searchTags, trimmed]);
+                                setSearchQuery('');
+                                setCurrentPage(1);
+                              }
+                            } else if (e.key === 'Backspace' && searchQuery === '' && searchTags.length > 0) {
+                              setSearchTags(searchTags.slice(0, -1));
+                              setCurrentPage(1);
+                            }
+                          }}
+                          className="flex-1 min-w-[150px] bg-transparent border-0 p-1 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-0"
+                        />
+                      </div>
                     </div>
 
                     {/* Left Actions - Add New & Sort dropdowns */}
@@ -1003,7 +1023,7 @@ export default function App() {
                       <option value="12">12 Frames</option>
                     </select>
 
-                    {(activeCategoryFilter !== null || showFavoritesOnly || statusFilter !== 'active' || frameCountFilter !== null || searchQuery !== '') && (
+                    {(activeCategoryFilter !== null || showFavoritesOnly || statusFilter !== 'active' || frameCountFilter !== null || searchQuery !== '' || searchTags.length > 0) && (
                       <button
                         onClick={() => {
                           setActiveCategoryFilter(null);
@@ -1011,6 +1031,7 @@ export default function App() {
                           setStatusFilter('active');
                           setFrameCountFilter(null);
                           setSearchQuery('');
+                          setSearchTags([]);
                         }}
                         className="text-xs text-rose-400 bg-rose-950/20 border border-rose-900/40 rounded-lg px-3 py-1 hover:bg-rose-950/50 transition flex items-center gap-1 cursor-pointer ml-auto"
                       >
@@ -1465,6 +1486,14 @@ export default function App() {
                                   >
                                     <MoveRight className="w-3 h-3" />
                                   </button>
+                                  <a
+                                    href={img.imageSrc}
+                                    download={img.fileName}
+                                    className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-indigo-400 flex items-center justify-center cursor-pointer"
+                                    title="Download Frame"
+                                  >
+                                    <Download className="w-3 h-3" />
+                                  </a>
                                   <button
                                     onClick={() => handleDeleteImage(img.id!)}
                                     className="p-1 hover:bg-rose-950/30 rounded text-slate-500 hover:text-rose-400"
@@ -1666,7 +1695,7 @@ export default function App() {
 
                     {/* Animation live preview player box (placed at the bottom of Right Column) */}
                     <AnimationPreview
-                      sheetSrc={editorSheets[0]?.sheetSrc || ''}
+                      sheetSrc={editorSheets[0] ? `${editorSheets[0].sheetSrc}?t=${editorSheets[0].createdAt}` : ''}
                       frameCount={editorSheets[0]?.frameCount || 0}
                       frameWidth={editorSheets[0]?.frameWidth || 64}
                       frameHeight={editorSheets[0]?.frameHeight || 64}

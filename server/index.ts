@@ -104,10 +104,108 @@ app.get('/api/categories', (_req, res) => {
 });
 
 // --- Projects list ---
-app.get('/api/projects', (_req, res) => {
+app.get('/api/projects', (req, res) => {
   const db = getDb();
-  const rows = db.prepare('SELECT * FROM projects').all() as Parameters<typeof mapProject>[0][];
-  res.json(rows.map(mapProject));
+  const { search, categoryId, status, isFavorite, sortBy, frameCount } = req.query;
+
+  const whereClauses: string[] = [];
+  const params: Record<string, any> = {};
+
+  // Status Filter
+  if (status === 'active' || status === 'archived') {
+    whereClauses.push('projects.status = :status');
+    params.status = status;
+  }
+
+  // Favorite Filter
+  if (isFavorite === 'true' || isFavorite === '1') {
+    whereClauses.push('projects.isFavorite = 1');
+  }
+
+  // Category Filter
+  if (categoryId) {
+    whereClauses.push('projects.categoryId = :categoryId');
+    params.categoryId = parseInt(categoryId as string, 10);
+  }
+
+  // Frame Count Filter
+  if (frameCount) {
+    whereClauses.push('projects.frameCount = :frameCount');
+    params.frameCount = parseInt(frameCount as string, 10);
+  }
+
+  // Search Filter (supports multiple comma-separated keywords)
+  if (search && typeof search === 'string' && search.trim() !== '') {
+    const searchTerms = search.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+    searchTerms.forEach((term, index) => {
+      const bindName = `searchPattern_${index}`;
+      whereClauses.push(`(
+        LOWER(projects.name) LIKE :${bindName} OR
+        LOWER(projects.description) LIKE :${bindName} OR
+        LOWER(categories.name) LIKE :${bindName} OR
+        (projects.frameWidth || 'x' || projects.frameHeight) LIKE :${bindName} OR
+        EXISTS (
+          SELECT 1 FROM project_tags
+          WHERE project_tags.projectId = projects.id AND LOWER(project_tags.tagName) LIKE :${bindName}
+        )
+      )`);
+      params[bindName] = `%${term}%`;
+    });
+  }
+
+  // Order By
+  let orderBy = 'projects.updatedAt DESC';
+  if (sortBy === 'created') {
+    orderBy = 'projects.createdAt DESC';
+  } else if (sortBy === 'name') {
+    orderBy = 'projects.name ASC';
+  } else if (sortBy === 'frames') {
+    orderBy = 'projects.frameCount DESC';
+  }
+
+  const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+  
+  const querySql = `
+    SELECT DISTINCT projects.*
+    FROM projects
+    LEFT JOIN categories ON projects.categoryId = categories.id
+    ${whereSql}
+    ORDER BY ${orderBy}
+  `;
+
+  try {
+    const rows = db.prepare(querySql).all(params) as Parameters<typeof mapProject>[0][];
+
+    const stats = db.prepare(`
+      SELECT
+        COUNT(*) as totalProjectsCount,
+        COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) as activeProjectsCount,
+        COALESCE(SUM(CASE WHEN isFavorite = 1 THEN 1 ELSE 0 END), 0) as favoriteCount,
+        COALESCE(SUM(frameCount), 0) as totalFrames,
+        COALESCE(SUM(CASE WHEN version > 0 THEN 1 ELSE 0 END), 0) as totalGeneratedSheets
+      FROM projects
+    `).get() as {
+      totalProjectsCount: number;
+      activeProjectsCount: number;
+      favoriteCount: number;
+      totalFrames: number;
+      totalGeneratedSheets: number;
+    };
+
+    res.json({
+      projects: rows.map(mapProject),
+      stats: {
+        totalProjectsCount: stats.totalProjectsCount || 0,
+        activeProjectsCount: stats.activeProjectsCount || 0,
+        favoriteCount: stats.favoriteCount || 0,
+        totalFrames: stats.totalFrames || 0,
+        totalGeneratedSheets: stats.totalGeneratedSheets || 0,
+      }
+    });
+  } catch (err) {
+    console.error('Failed to query projects:', err);
+    res.status(500).json({ error: 'Failed to query projects' });
+  }
 });
 
 app.get('/api/projects/:id', (req, res) => {

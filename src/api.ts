@@ -90,8 +90,41 @@ export async function seedDatabase(): Promise<void> {
   await requestJson('/seed', { method: 'POST' });
 }
 
-export async function getProjects(): Promise<Project[]> {
-  return requestJson('/projects');
+export async function getProjects(params?: {
+  search?: string | string[];
+  categoryId?: number | null;
+  status?: string;
+  isFavorite?: boolean;
+  sortBy?: string;
+  frameCount?: number | null;
+}): Promise<{
+  projects: Project[];
+  stats: {
+    totalProjectsCount: number;
+    activeProjectsCount: number;
+    favoriteCount: number;
+    totalFrames: number;
+    totalGeneratedSheets: number;
+  };
+}> {
+  const query = new URLSearchParams();
+  if (params) {
+    if (params.search) {
+      const searchVal = Array.isArray(params.search) ? params.search.join(',') : params.search;
+      query.append('search', searchVal);
+    }
+    if (params.categoryId !== undefined && params.categoryId !== null) {
+      query.append('categoryId', String(params.categoryId));
+    }
+    if (params.status) query.append('status', params.status);
+    if (params.isFavorite !== undefined) query.append('isFavorite', String(params.isFavorite));
+    if (params.sortBy) query.append('sortBy', params.sortBy);
+    if (params.frameCount !== undefined && params.frameCount !== null) {
+      query.append('frameCount', String(params.frameCount));
+    }
+  }
+  const queryString = query.toString() ? `?${query.toString()}` : '';
+  return requestJson(`/projects${queryString}`);
 }
 
 export async function getProject(id: number): Promise<Project | undefined> {
