@@ -37,7 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV PORT=3001
+ENV PORT=4000
 ENV BIND_HOST=127.0.0.1
 ENV SERVE_STATIC=false
 
@@ -51,7 +51,7 @@ COPY docker/entrypoint.sh /entrypoint.sh
 
 RUN chmod +x /entrypoint.sh && mkdir -p /app/data/uploads
 
-# Only the frontend (nginx) is exposed; API runs on localhost inside the container
-EXPOSE 80
+# Nginx serves the frontend and proxies to the API on port 3001
+EXPOSE 3001
 
 ENTRYPOINT ["/entrypoint.sh"]

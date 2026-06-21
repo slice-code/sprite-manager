@@ -66,6 +66,7 @@ export default function App() {
   const [editorTags, setEditorTags] = useState<string[]>([]);
   const [newTagInput, setNewTagInput] = useState('');
   const [uploadingImages, setUploadingImages] = useState(false);
+  const [isStitching, setIsStitching] = useState(false);
   
   // Dimensions & Resize states
   const [frameWidth, setFrameWidth] = useState(64);
@@ -462,15 +463,21 @@ export default function App() {
     }
 
     try {
-      const sheetWidth = frameWidth * selectedFrames.length;
-      const sheetHeight = frameHeight;
+      setIsStitching(true);
+      const cols = 4;
+      const rows = Math.max(4, Math.ceil(selectedFrames.length / cols));
+      const sheetWidth = frameWidth * cols;
+      const sheetHeight = frameHeight * rows;
 
-      // Draw horizontal canvas sequence
+      // Draw 4x4 (or 4-column grid) canvas sequence
       const canvas = document.createElement('canvas');
       canvas.width = sheetWidth;
       canvas.height = sheetHeight;
       const ctx = canvas.getContext('2d');
-      if (!ctx) return;
+      if (!ctx) {
+        setIsStitching(false);
+        return;
+      }
 
       // Ensure transparent backgrounds are crisp and not filled
       ctx.imageSmoothingEnabled = false;
@@ -480,7 +487,7 @@ export default function App() {
 
       selectedFrames.forEach((frameObj, idx) => {
         const img = new Image();
-        img.onload = () => {
+        img.onload = async () => {
           loadedCount++;
           tempImgs[idx] = img;
 
@@ -489,20 +496,28 @@ export default function App() {
             reverseCanvas.width = sheetWidth;
             reverseCanvas.height = sheetHeight;
             const reverseCtx = reverseCanvas.getContext('2d');
-            if (!reverseCtx) return;
+            if (!reverseCtx) {
+              setIsStitching(false);
+              return;
+            }
             reverseCtx.imageSmoothingEnabled = false;
 
             tempImgs.forEach((itm, index) => {
-              ctx.drawImage(itm, index * frameWidth, 0, frameWidth, frameHeight);
+              const col = index % cols;
+              const row = Math.floor(index / cols);
+              const dx = col * frameWidth;
+              const dy = row * frameHeight;
+
+              ctx.drawImage(itm, dx, dy, frameWidth, frameHeight);
 
               reverseCtx.save();
-              reverseCtx.translate((index + 1) * frameWidth, 0);
+              reverseCtx.translate(dx + frameWidth, dy);
               reverseCtx.scale(-1, 1);
               reverseCtx.drawImage(itm, 0, 0, frameWidth, frameHeight);
               reverseCtx.restore();
             });
 
-            triggerSaveSheetState(
+            await triggerSaveSheetState(
               canvas.toDataURL('image/png'),
               reverseCanvas.toDataURL('image/png'),
               sheetWidth,
@@ -511,11 +526,20 @@ export default function App() {
             );
           }
         };
+        img.onerror = () => {
+          loadedCount++;
+          console.error(`Failed to load frame image: ${frameObj.fileName}`);
+          if (loadedCount === selectedFrames.length) {
+            alert("Some frame images failed to load. Cannot generate sprite sheet.");
+            setIsStitching(false);
+          }
+        };
         img.src = frameObj.imageSrc;
       });
 
     } catch (e) {
       console.error("Stitching process failed:", e);
+      setIsStitching(false);
     }
   };
 
@@ -548,6 +572,9 @@ export default function App() {
       await reloadAllData();
     } catch (e) {
       console.error("Failed storing updated sprite sheet version:", e);
+      alert("Error saving compiled sheet: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setIsStitching(false);
     }
   };
 
@@ -695,21 +722,28 @@ export default function App() {
   const activeCoordinates: FrameCoord[] = useMemo(() => {
     if (!currentProject || editorImages.length === 0) return [];
     const selected = editorImages.filter(img => img.isSelected);
+    const cols = 4;
     
-    return selected.map((img, idx) => ({
-      filename: img.fileName,
-      x: idx * frameWidth,
-      y: 0,
-      w: frameWidth,
-      h: frameHeight
-    }));
+    return selected.map((img, idx) => {
+      const col = idx % cols;
+      const row = Math.floor(idx / cols);
+      return {
+        filename: img.fileName,
+        x: col * frameWidth,
+        y: row * frameHeight,
+        w: frameWidth,
+        h: frameHeight
+      };
+    });
   }, [currentProject, editorImages, frameWidth, frameHeight]);
 
   const activeMetadataOutput = useMemo(() => {
     if (!currentProject || activeCoordinates.length === 0) return '// Please generate spritesheet first';
     const name = currentProject.name;
-    const sWidth = frameWidth * activeCoordinates.length;
-    const sHeight = frameHeight;
+    const cols = 4;
+    const rows = Math.max(4, Math.ceil(activeCoordinates.length / cols));
+    const sWidth = frameWidth * cols;
+    const sHeight = frameHeight * rows;
 
     if (exporterFormat === 'json') {
       return generateJSONExport(name, activeCoordinates, sWidth, sHeight);
@@ -1765,6 +1799,37 @@ export default function App() {
               </div>
             </motion.div>
           </div>
+        )}
+      </AnimatePresence>
+
+      {/* Loading overlay for image uploading or sprite sheet stitching */}
+      <AnimatePresence>
+        {(uploadingImages || isStitching) && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-950/80 backdrop-blur-md"
+          >
+            <div className="flex flex-col items-center gap-4 bg-slate-900/60 border border-slate-800 p-8 rounded-2xl shadow-2xl max-w-sm text-center">
+              {/* Spinner */}
+              <div className="relative w-16 h-16">
+                <div className="absolute inset-0 rounded-full border-4 border-slate-800"></div>
+                <div className="absolute inset-0 rounded-full border-4 border-t-indigo-500 animate-spin"></div>
+              </div>
+              
+              <div className="flex flex-col gap-1.5 mt-2">
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                  {uploadingImages ? "Uploading Frames" : "Generating Sprite Sheet"}
+                </h3>
+                <p className="text-xs text-slate-400">
+                  {uploadingImages 
+                    ? "Uploading image files and updating project frames..." 
+                    : "Assembling frames in 4x4 layout and applying high-compression..."}
+                </p>
+              </div>
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
 

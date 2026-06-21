@@ -5,14 +5,14 @@ services:
     restart: unless-stopped
     environment:
       NODE_ENV: production
-      PORT: 3001
+      PORT: 4000
       BIND_HOST: 127.0.0.1
       SERVE_STATIC: "false"
     volumes:
       - sprite-data:/app/data
     ports:
-      # Frontend only (nginx :80). Backend API is internal via nginx proxy.
-      - "3000:80"
+      # Frontend & Backend API via nginx on port 3001
+      - "3001:3001"
 
 volumes:
   sprite-data:

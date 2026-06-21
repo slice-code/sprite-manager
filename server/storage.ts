@@ -1,6 +1,41 @@
 import fs from 'fs';
 import path from 'path';
 import { UPLOADS_DIR } from './database.js';
+import sharp from 'sharp';
+
+/** Compresses a PNG buffer using sharp with palette quantization (similar to TinyPNG) */
+export async function compressPngBuffer(buffer: Buffer): Promise<Buffer> {
+  console.log(`[compressPngBuffer] Compressing buffer of size ${buffer.length} bytes`);
+  try {
+    console.log('[compressPngBuffer] Attempting sharp compression...');
+    const result = await sharp(buffer)
+      .png({ compressionLevel: 6 })
+      .toBuffer();
+    console.log(`[compressPngBuffer] Sharp compression succeeded. Result size: ${result.length} bytes`);
+    return result;
+  } catch (err) {
+    console.error('[compressPngBuffer] Failed to compress PNG buffer with sharp:', err);
+    // Fallback to canvas compression if sharp fails
+    try {
+      console.log('[compressPngBuffer] Attempting canvas compression fallback...');
+      const { createCanvas, Image } = await import('canvas');
+      const img = new Image();
+      img.src = buffer;
+      console.log(`[compressPngBuffer] Canvas Image loaded. Dimensions: ${img.width}x${img.height}`);
+      const canvas = createCanvas(img.width, img.height);
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(img, 0, 0);
+      const result = canvas.toBuffer('image/png', { compressionLevel: 6 });
+      console.log(`[compressPngBuffer] Canvas compression succeeded. Result size: ${result.length} bytes`);
+      return result;
+    } catch (canvasErr) {
+      console.error('[compressPngBuffer] Fallback canvas compression failed:', canvasErr);
+      return buffer;
+    }
+  }
+}
+
 
 export function ensureProjectDirs(projectId: number) {
   const base = path.join(UPLOADS_DIR, 'projects', String(projectId));

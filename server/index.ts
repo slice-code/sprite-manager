@@ -12,6 +12,7 @@ import {
   sheetFilePath,
   reversedSheetFilePath,
   uniqueFramePath,
+  compressPngBuffer,
 } from './storage.js';
 import {
   mapCategory,
@@ -305,7 +306,7 @@ app.get('/api/projects/:id/images', (req, res) => {
   res.json(rows.map(mapProjectImage));
 });
 
-app.post('/api/projects/:id/images', uploadFrameImages.array('images', 50), (req, res) => {
+app.post('/api/projects/:id/images', uploadFrameImages.array('images'), (req, res) => {
   const db = getDb();
   const projectId = parseInt(req.params.id, 10);
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Parameters<typeof mapProject>[0] | undefined;
@@ -447,61 +448,86 @@ app.post(
     { name: 'sheet', maxCount: 1 },
     { name: 'reverse', maxCount: 1 },
   ]),
-  (req, res) => {
-  const db = getDb();
-  const projectId = parseInt(req.params.id, 10);
-  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Parameters<typeof mapProject>[0] | undefined;
-  if (!project) return res.status(404).json({ error: 'Project not found' });
+  async (req, res, next) => {
+    try {
+      console.log(`[POST /api/projects/${req.params.id}/sheets] Start`);
+      const db = getDb();
+      const projectId = parseInt(req.params.id, 10);
+      const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Parameters<typeof mapProject>[0] | undefined;
+      if (!project) {
+        console.log(`[POST /api/projects/${req.params.id}/sheets] Project not found`);
+        return res.status(404).json({ error: 'Project not found' });
+      }
 
-  const files = req.files as { sheet?: Express.Multer.File[]; reverse?: Express.Multer.File[] } | undefined;
-  const file = files?.sheet?.[0];
-  const reverseFile = files?.reverse?.[0];
-  if (!file) return res.status(400).json({ error: 'No sheet file provided. Use multipart field "sheet".' });
+      const files = req.files as { sheet?: Express.Multer.File[]; reverse?: Express.Multer.File[] } | undefined;
+      const file = files?.sheet?.[0];
+      const reverseFile = files?.reverse?.[0];
+      if (!file) {
+        console.log(`[POST /api/projects/${req.params.id}/sheets] No sheet file provided`);
+        return res.status(400).json({ error: 'No sheet file provided. Use multipart field "sheet".' });
+      }
 
-  const sheetWidth = parseInt(String(req.body.sheetWidth), 10);
-  const sheetHeight = parseInt(String(req.body.sheetHeight), 10);
-  const frameCount = parseInt(String(req.body.frameCount), 10);
-  const frameWidth = parseInt(String(req.body.frameWidth), 10);
-  const frameHeight = parseInt(String(req.body.frameHeight), 10);
-  const fps = parseInt(String(req.body.fps ?? project.fps), 10);
+      console.log(`[POST /api/projects/${req.params.id}/sheets] Files received. Sheet size: ${file.buffer.length} bytes. Reverse size: ${reverseFile?.buffer?.length || 0} bytes.`);
 
-  if ([sheetWidth, sheetHeight, frameCount, frameWidth, frameHeight].some((n) => Number.isNaN(n) || n <= 0)) {
-    return res.status(400).json({ error: 'Invalid sheet metadata fields' });
+      const sheetWidth = parseInt(String(req.body.sheetWidth), 10);
+      const sheetHeight = parseInt(String(req.body.sheetHeight), 10);
+      const frameCount = parseInt(String(req.body.frameCount), 10);
+      const frameWidth = parseInt(String(req.body.frameWidth), 10);
+      const frameHeight = parseInt(String(req.body.frameHeight), 10);
+      const fps = parseInt(String(req.body.fps ?? project.fps), 10);
+
+      if ([sheetWidth, sheetHeight, frameCount, frameWidth, frameHeight].some((n) => Number.isNaN(n) || n <= 0)) {
+        console.log(`[POST /api/projects/${req.params.id}/sheets] Invalid sheet metadata`);
+        return res.status(400).json({ error: 'Invalid sheet metadata fields' });
+      }
+
+      console.log(`[POST /api/projects/${req.params.id}/sheets] Clearing project sheets...`);
+      clearProjectSheets(projectId);
+
+      const sheetVersion = 1;
+      const { absolute, relative } = sheetFilePath(projectId, sheetVersion);
+      console.log(`[POST /api/projects/${req.params.id}/sheets] Compressing sheet...`);
+      const compressedSheet = await compressPngBuffer(file.buffer);
+      console.log(`[POST /api/projects/${req.params.id}/sheets] Saving sheet to ${absolute}...`);
+      saveBuffer(compressedSheet, absolute);
+
+      let reverseRelative: string | null = null;
+      if (reverseFile) {
+        const reversed = reversedSheetFilePath(projectId, sheetVersion);
+        console.log(`[POST /api/projects/${req.params.id}/sheets] Compressing reverse sheet...`);
+        const compressedReverse = await compressPngBuffer(reverseFile.buffer);
+        console.log(`[POST /api/projects/${req.params.id}/sheets] Saving reverse sheet to ${reversed.absolute}...`);
+        saveBuffer(compressedReverse, reversed.absolute);
+        reverseRelative = reversed.relative;
+      }
+
+      const now = Date.now();
+      console.log(`[POST /api/projects/${req.params.id}/sheets] Updating database...`);
+      db.prepare(`
+        INSERT INTO project_sheets (projectId, version, filePath, reverseFilePath, sheetWidth, sheetHeight, frameCount, frameWidth, frameHeight, fps, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(projectId, sheetVersion, relative, reverseRelative, sheetWidth, sheetHeight, frameCount, frameWidth, frameHeight, fps, now);
+
+      db.prepare(`
+        UPDATE projects SET version = ?, sheetWidth = ?, sheetHeight = ?, frameCount = ?,
+          frameWidth = ?, frameHeight = ?, updatedAt = ?
+        WHERE id = ?
+      `).run(sheetVersion, sheetWidth, sheetHeight, frameCount, frameWidth, frameHeight, now, projectId);
+
+      const sheets = db.prepare('SELECT * FROM project_sheets WHERE projectId = ? ORDER BY version DESC').all(projectId) as Parameters<typeof mapProjectSheet>[0][];
+      const updatedProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Parameters<typeof mapProject>[0];
+
+      console.log(`[POST /api/projects/${req.params.id}/sheets] Done!`);
+      res.status(201).json({
+        project: mapProject(updatedProject),
+        sheets: sheets.map(mapProjectSheet),
+      });
+    } catch (err) {
+      console.error(`[POST /api/projects/${req.params.id}/sheets] Error:`, err);
+      next(err);
+    }
   }
-
-  clearProjectSheets(projectId);
-
-  const sheetVersion = 1;
-  const { absolute, relative } = sheetFilePath(projectId, sheetVersion);
-  saveBuffer(file.buffer, absolute);
-
-  let reverseRelative: string | null = null;
-  if (reverseFile) {
-    const reversed = reversedSheetFilePath(projectId, sheetVersion);
-    saveBuffer(reverseFile.buffer, reversed.absolute);
-    reverseRelative = reversed.relative;
-  }
-
-  const now = Date.now();
-  db.prepare(`
-    INSERT INTO project_sheets (projectId, version, filePath, reverseFilePath, sheetWidth, sheetHeight, frameCount, frameWidth, frameHeight, fps, createdAt)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(projectId, sheetVersion, relative, reverseRelative, sheetWidth, sheetHeight, frameCount, frameWidth, frameHeight, fps, now);
-
-  db.prepare(`
-    UPDATE projects SET version = ?, sheetWidth = ?, sheetHeight = ?, frameCount = ?,
-      frameWidth = ?, frameHeight = ?, updatedAt = ?
-    WHERE id = ?
-  `).run(sheetVersion, sheetWidth, sheetHeight, frameCount, frameWidth, frameHeight, now, projectId);
-
-  const sheets = db.prepare('SELECT * FROM project_sheets WHERE projectId = ? ORDER BY version DESC').all(projectId) as Parameters<typeof mapProjectSheet>[0][];
-  const updatedProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Parameters<typeof mapProject>[0];
-
-  res.status(201).json({
-    project: mapProject(updatedProject),
-    sheets: sheets.map(mapProjectSheet),
-  });
-});
+);
 
 // --- Production static (skipped in Docker — nginx serves frontend) ---
 const distPath = path.join(__dirname, '..', 'dist');

@@ -50,18 +50,18 @@ Sheet metadata fields: `sheetWidth`, `sheetHeight`, `frameCount`, `frameWidth`, 
 
 ## Docker
 
-Satu container menjalankan **nginx (frontend)** + **Node API (backend)**. Hanya frontend yang di-expose ke host.
+Satu container menjalankan **nginx (frontend)** + **Node API (backend)**. Keduanya di-expose melalui port **3001**.
 
 ```
-Browser :3000 → nginx :80 (UI)
-                  └─ proxy /api, /uploads → Node :3001 (internal, tidak di-expose)
+Browser :3001 → nginx :3001 (UI)
+                  └─ proxy /api, /uploads → Node :4000 (internal)
 ```
 
 ```bash
 docker compose up --build -d
 ```
 
-Open http://localhost:3000
+Open http://localhost:3001 (atau http://<IP-HOST>:3001)
 
 Data persists in the `sprite-data` Docker volume (`/app/data` in the container).
 

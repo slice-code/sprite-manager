@@ -6,6 +6,7 @@ import {
   sheetFilePath,
   reversedSheetFilePath,
   toRelativePath,
+  compressPngBuffer,
 } from './storage.js';
 import { flipSheetFramesHorizontally } from './imageFlip.js';
 import path from 'path';
@@ -165,15 +166,21 @@ function generateBubblePulseFrames(): Buffer[] {
   return frames;
 }
 
-function stitchHorizontalSheet(frameBuffers: Buffer[], width: number, height: number): Buffer {
-  const canvas = createCanvas(width * frameBuffers.length, height);
+function stitchGridSheet(frameBuffers: Buffer[], width: number, height: number): Buffer {
+  const cols = 4;
+  const rows = Math.max(4, Math.ceil(frameBuffers.length / cols));
+  const canvas = createCanvas(width * cols, height * rows);
   const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+
   frameBuffers.forEach((buf, i) => {
     const img = new Image();
     img.src = buf;
-    ctx.drawImage(img, i * width, 0, width, height);
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    ctx.drawImage(img, col * width, row * height, width, height);
   });
-  return canvas.toBuffer('image/png');
+  return canvas.toBuffer('image/png', { compressionLevel: 9 });
 }
 
 async function saveFramesAndProject(
@@ -193,6 +200,11 @@ async function saveFramesAndProject(
   const frameHeight = 64;
   const frameCount = frameBuffers.length;
 
+  const cols = 4;
+  const rows = Math.max(4, Math.ceil(frameCount / cols));
+  const sheetWidth = frameWidth * cols;
+  const sheetHeight = frameHeight * rows;
+
   const insertProject = db.prepare(`
     INSERT INTO projects (name, description, categoryId, coverImagePath, version, status,
       frameWidth, frameHeight, frameCount, sheetWidth, sheetHeight, fps, isFavorite, createdAt, updatedAt)
@@ -206,8 +218,8 @@ async function saveFramesAndProject(
     frameWidth,
     frameHeight,
     frameCount,
-    frameWidth * frameCount,
-    frameHeight,
+    sheetWidth,
+    sheetHeight,
     fps,
     isFavorite ? 1 : 0,
     now,
@@ -232,29 +244,31 @@ async function saveFramesAndProject(
     `).run(projectId, rel, fileNames[i], i);
   }
 
-  const sheetBuffer = stitchHorizontalSheet(savedFramePaths, frameWidth, frameHeight);
+  const sheetBufferRaw = stitchGridSheet(savedFramePaths, frameWidth, frameHeight);
+  const sheetBuffer = await compressPngBuffer(sheetBufferRaw);
   const { absolute: sheetAbs, relative: sheetRel } = sheetFilePath(projectId, 1);
   saveBuffer(sheetBuffer, sheetAbs);
 
-  const reverseBuffer = flipSheetFramesHorizontally(
+  const reverseBufferRaw = flipSheetFramesHorizontally(
     sheetBuffer,
-    frameWidth * frameCount,
-    frameHeight,
+    sheetWidth,
+    sheetHeight,
     frameWidth,
     frameCount
   );
+  const reverseBuffer = await compressPngBuffer(reverseBufferRaw);
   const { absolute: reverseAbs, relative: reverseRel } = reversedSheetFilePath(projectId, 1);
   saveBuffer(reverseBuffer, reverseAbs);
 
   db.prepare(`
     UPDATE projects SET coverImagePath = ?, version = 1, sheetWidth = ?, sheetHeight = ?, updatedAt = ?
     WHERE id = ?
-  `).run(coverPath, frameWidth * frameCount, frameHeight, now, projectId);
+  `).run(coverPath, sheetWidth, sheetHeight, now, projectId);
 
   db.prepare(`
     INSERT INTO project_sheets (projectId, version, filePath, reverseFilePath, sheetWidth, sheetHeight, frameCount, frameWidth, frameHeight, fps, createdAt)
     VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(projectId, sheetRel, reverseRel, frameWidth * frameCount, frameHeight, frameCount, frameWidth, frameHeight, fps, now);
+  `).run(projectId, sheetRel, reverseRel, sheetWidth, sheetHeight, frameCount, frameWidth, frameHeight, fps, now);
 
   for (const tag of tags) {
     db.prepare('INSERT OR IGNORE INTO tags (name) VALUES (?)').run(tag);

@@ -9,10 +9,6 @@ function isImageFile(file: Express.Multer.File): boolean {
 
 export const uploadFrameImages = multer({
   storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 15 * 1024 * 1024,
-    files: 50,
-  },
   fileFilter: (_req, file, cb) => {
     if (isImageFile(file)) {
       cb(null, true);

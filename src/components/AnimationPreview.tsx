@@ -57,12 +57,14 @@ export default function AnimationPreview({
 
   const metrics = useMemo(() => {
     const count = Math.max(1, frameCount);
-    const sheetW = naturalSize?.w || sheetWidth || frameWidth * count;
-    const sheetH = naturalSize?.h || sheetHeight || frameHeight;
-    const fw = Math.round(sheetW / count);
-    const fh = sheetH;
+    const cols = 4;
+    const rows = Math.max(4, Math.ceil(count / cols));
+    const sheetW = naturalSize?.w || sheetWidth || frameWidth * cols;
+    const sheetH = naturalSize?.h || sheetHeight || frameHeight * rows;
+    const fw = naturalSize ? Math.round(sheetW / cols) : frameWidth;
+    const fh = naturalSize ? Math.round(sheetH / rows) : frameHeight;
     const scale = computeIntegerScale(fw, fh);
-    return { fw, fh, sheetW, sheetH, scale, count };
+    return { fw, fh, sheetW, sheetH, scale, count, cols };
   }, [naturalSize, sheetWidth, sheetHeight, frameWidth, frameHeight, frameCount]);
 
   useEffect(() => {
@@ -114,7 +116,11 @@ export default function AnimationPreview({
   const viewportH = metrics.fh * metrics.scale;
   const sheetDisplayW = metrics.sheetW * metrics.scale;
   const sheetDisplayH = metrics.sheetH * metrics.scale;
-  const offsetX = currentFrame * metrics.fw * metrics.scale;
+  
+  const col = currentFrame % metrics.cols;
+  const row = Math.floor(currentFrame / metrics.cols);
+  const offsetX = col * metrics.fw * metrics.scale;
+  const offsetY = row * metrics.fh * metrics.scale;
 
   return (
     <div className="bg-slate-900/40 border border-slate-800 rounded-lg p-4 flex flex-col gap-4">
@@ -141,7 +147,7 @@ export default function AnimationPreview({
               style={{
                 width: sheetDisplayW,
                 height: sheetDisplayH,
-                transform: `translate3d(-${offsetX}px, 0, 0)`,
+                transform: `translate3d(-${offsetX}px, -${offsetY}px, 0)`,
                 willChange: 'transform',
               }}
             />
