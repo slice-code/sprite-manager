@@ -26,6 +26,7 @@ export interface ProjectRow {
   sheetHeight: number;
   fps: number;
   isFavorite: number;
+  type: '2d' | '3d';
   createdAt: number;
   updatedAt: number;
 }
@@ -101,6 +102,7 @@ function initSchema(database: Database.Database) {
       sheetHeight INTEGER NOT NULL DEFAULT 0,
       fps INTEGER NOT NULL DEFAULT 10,
       isFavorite INTEGER NOT NULL DEFAULT 0,
+      type TEXT NOT NULL DEFAULT '2d' CHECK(type IN ('2d', '3d')),
       createdAt INTEGER NOT NULL,
       updatedAt INTEGER NOT NULL
     );
@@ -148,6 +150,10 @@ function runMigrations(database: Database.Database) {
   const columns = database.prepare('PRAGMA table_info(project_sheets)').all() as { name: string }[];
   if (!columns.some((c) => c.name === 'reverseFilePath')) {
     database.exec('ALTER TABLE project_sheets ADD COLUMN reverseFilePath TEXT');
+  }
+  const projColumns = database.prepare('PRAGMA table_info(projects)').all() as { name: string }[];
+  if (!projColumns.some((c) => c.name === 'type')) {
+    database.exec("ALTER TABLE projects ADD COLUMN type TEXT NOT NULL DEFAULT '2d'");
   }
 }
 

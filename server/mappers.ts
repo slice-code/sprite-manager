@@ -21,6 +21,7 @@ export interface Project {
   sheetHeight: number;
   fps: number;
   isFavorite: boolean;
+  type: '2d' | '3d';
   createdAt: number;
   updatedAt: number;
 }
@@ -59,13 +60,13 @@ export function mapCategory(row: CategoryRow): Category {
   return { id: row.id, name: row.name };
 }
 
-export function mapProject(row: ProjectRow): Project {
+export function mapProject(row: ProjectRow & { resolvedCoverImagePath?: string | null }): Project {
   return {
     id: row.id,
     name: row.name,
     description: row.description,
     categoryId: row.categoryId ?? undefined,
-    coverImage: toPublicUrl(row.coverImagePath),
+    coverImage: toPublicUrl(row.resolvedCoverImagePath !== undefined ? row.resolvedCoverImagePath : row.coverImagePath),
     version: row.version,
     status: row.status,
     frameWidth: row.frameWidth,
@@ -75,6 +76,7 @@ export function mapProject(row: ProjectRow): Project {
     sheetHeight: row.sheetHeight,
     fps: row.fps,
     isFavorite: row.isFavorite === 1,
+    type: row.type || '2d',
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

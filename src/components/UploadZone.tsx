@@ -5,16 +5,21 @@ import { sortFilesByNumericName } from '../utils/fileSort';
 interface UploadZoneProps {
   onFilesSelected: (files: File[]) => void | Promise<void>;
   uploading?: boolean;
+  projectType?: '2d' | '3d';
 }
 
-const VALID_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
-const VALID_EXT = /\.(png|jpe?g|webp)$/i;
+const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+const IMAGE_EXT = /\.(png|jpe?g|webp)$/i;
+const THREE_D_EXT = /\.(png|jpe?g|webp|obj|blend|fbx|gltf|glb|stl|ply|3ds|dae|mtl|tga)$/i;
 
-function isValidImageFile(file: File): boolean {
-  return VALID_TYPES.includes(file.type) || VALID_EXT.test(file.name);
+function isValidFile(file: File, projectType: '2d' | '3d'): boolean {
+  if (projectType === '3d') {
+    return THREE_D_EXT.test(file.name);
+  }
+  return IMAGE_TYPES.includes(file.type) || IMAGE_EXT.test(file.name);
 }
 
-export default function UploadZone({ onFilesSelected, uploading = false }: UploadZoneProps) {
+export default function UploadZone({ onFilesSelected, uploading = false, projectType = '2d' }: UploadZoneProps) {
   const [isDragActive, setIsDragActive] = useState(false);
   const [errorLog, setErrorLog] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -80,10 +85,14 @@ export default function UploadZone({ onFilesSelected, uploading = false }: Uploa
   const processFiles = async (files: File[]) => {
     if (uploading) return;
 
-    const filteredFiles = sortFilesByNumericName(files.filter(isValidImageFile));
+    const validFiles = files.filter(f => isValidFile(f, projectType));
+    const filteredFiles = sortFilesByNumericName(validFiles);
 
     if (filteredFiles.length === 0) {
-      setErrorLog('No valid PNG, JPG, or WEBP images detected.');
+      setErrorLog(projectType === '3d' 
+        ? 'No valid 3D files (OBJ, BLEND, FBX, GLTF, GLB, STL, PLY, 3DS, DAE, MTL, TGA) or images detected.'
+        : 'No valid PNG, JPG, or WEBP images detected.'
+      );
       return;
     }
 
@@ -116,7 +125,7 @@ export default function UploadZone({ onFilesSelected, uploading = false }: Uploa
           type="file"
           ref={fileInputRef}
           multiple
-          accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+          accept={projectType === '3d' ? ".png,.jpg,.jpeg,.webp,.obj,.blend,.fbx,.gltf,.glb,.stl,.ply,.3ds,.dae,.mtl,.tga" : ".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"}
           onChange={handleFileSelect}
           className="hidden"
           disabled={uploading}
@@ -130,13 +139,17 @@ export default function UploadZone({ onFilesSelected, uploading = false }: Uploa
           )}
         </p>
 
-        <p className="text-xs text-slate-400 mt-2 flex items-center gap-1">
-          <ClipboardCopy className="w-3 h-3 text-emerald-400" />
-          Supports keyboard <kbd className="bg-slate-800 text-[10px] px-1 py-0.5 rounded text-slate-300">Ctrl+V</kbd> paste anywhere on page
-        </p>
+        {projectType === '2d' && (
+          <p className="text-xs text-slate-400 mt-2 flex items-center gap-1">
+            <ClipboardCopy className="w-3 h-3 text-emerald-400" />
+            Supports keyboard <kbd className="bg-slate-800 text-[10px] px-1 py-0.5 rounded text-slate-300">Ctrl+V</kbd> paste anywhere on page
+          </p>
+        )}
 
-        <span className="text-[10px] text-slate-500 mt-3 font-mono bg-slate-950 px-2 py-1 rounded border border-slate-800/80">
-          Accepts: PNG, JPG, or WEBP — auto-sorted by number in filename (e.g. 0001.png, 0033.png)
+        <span className="text-[10px] text-slate-500 mt-3 font-mono bg-slate-950 px-2 py-1 rounded border border-slate-800/80 max-w-[90%] text-center">
+          {projectType === '3d' 
+            ? 'Accepts: OBJ, BLEND, FBX, GLTF, GLB, STL, PLY, 3DS, DAE, MTL, TGA, PNG, JPG, WEBP' 
+            : 'Accepts: PNG, JPG, or WEBP — auto-sorted by number in filename (e.g. 0001.png, 0033.png)'}
         </span>
       </div>
 

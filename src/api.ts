@@ -23,6 +23,7 @@ export interface Project {
   sheetHeight: number;
   fps: number;
   isFavorite: boolean;
+  type: '2d' | '3d';
   createdAt: number;
   updatedAt: number;
 }
@@ -97,6 +98,7 @@ export async function getProjects(params?: {
   isFavorite?: boolean;
   sortBy?: string;
   frameCount?: number | null;
+  type?: '2d' | '3d';
 }): Promise<{
   projects: Project[];
   stats: {
@@ -122,6 +124,7 @@ export async function getProjects(params?: {
     if (params.frameCount !== undefined && params.frameCount !== null) {
       query.append('frameCount', String(params.frameCount));
     }
+    if (params.type) query.append('type', params.type);
   }
   const queryString = query.toString() ? `?${query.toString()}` : '';
   return requestJson(`/projects${queryString}`);
@@ -140,6 +143,7 @@ export async function createProject(data: {
   description: string;
   categoryId: number;
   tags: string[];
+  type?: '2d' | '3d';
 }): Promise<Project> {
   return requestJson('/projects', {
     method: 'POST',
@@ -198,6 +202,12 @@ export async function addProjectImages(
     formData.append('images', file, file.name);
   }
   return requestForm(`/projects/${projectId}/images`, formData);
+}
+
+export async function uploadProjectCover(projectId: number, file: File): Promise<Project> {
+  const formData = new FormData();
+  formData.append('cover', file, file.name);
+  return requestForm(`/projects/${projectId}/cover`, formData);
 }
 
 export async function updateProjectImage(id: number, data: { isSelected?: boolean; sortOrder?: number }): Promise<ProjectImage> {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  Plus, Search, SlidersHorizontal, Trash2, FolderPlus, Grid, 
+  Plus, Search, SlidersHorizontal, Trash2, FolderPlus, Grid, Box,
   Download, Sparkles, Star, Archive, RefreshCw, FileText, 
   ArrowLeft, Upload, Grid3X3, Layers, Settings, ChevronRight, 
   Calendar, Check, X, FileJson, Copy, Bookmark, Database, Image as ImageIcon,
@@ -14,7 +14,7 @@ import {
   createProject, deleteProject, duplicateProject, addProjectImages,
   updateProjectImage, deleteProjectImage, selectAllProjectImages,
   swapProjectImages, saveProjectSheet, addProjectTag, removeProjectTag, dataUrlToBlob,
-  sortProjectImagesByName,
+  sortProjectImagesByName, uploadProjectCover,
   type Project, type Category, type ProjectImage, type ProjectSheet
 } from './api';
 import { compareNumericFilenames } from './utils/fileSort';
@@ -47,6 +47,7 @@ export default function App() {
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
   const [sortBy, setSortBy] = useState<'updated' | 'created' | 'name' | 'frames'>('updated');
   const [frameCountFilter, setFrameCountFilter] = useState<number | null>(null);
+  const [typeFilter, setTypeFilter] = useState<'all' | '2d' | '3d'>('all');
 
   // Pagination for heavy storage scaling
   const [currentPage, setCurrentPage] = useState(1);
@@ -74,6 +75,7 @@ export default function App() {
   const [newProjectDesc, setNewProjectDesc] = useState('');
   const [newProjectCategory, setNewProjectCategory] = useState<number>(1);
   const [newProjectTagsInput, setNewProjectTagsInput] = useState('');
+  const [newProjectType, setNewProjectType] = useState<'2d' | '3d'>('2d');
 
   // Project Editor States (for current project)
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
@@ -103,6 +105,29 @@ export default function App() {
     return [...searchTags, q];
   }, [searchQuery, searchTags]);
 
+  const fileStats = useMemo(() => {
+    const counts = {
+      blender: 0,
+      models: 0,
+      images: 0,
+      other: 0,
+      total: editorImages.length
+    };
+    editorImages.forEach((img) => {
+      const ext = img.fileName.split('.').pop()?.toLowerCase();
+      if (ext === 'blend') {
+        counts.blender++;
+      } else if (['obj', 'fbx', 'gltf', 'glb', 'stl', 'ply', '3ds', 'dae'].includes(ext || '')) {
+        counts.models++;
+      } else if (['png', 'jpg', 'jpeg', 'webp'].includes(ext || '')) {
+        counts.images++;
+      } else {
+        counts.other++;
+      }
+    });
+    return counts;
+  }, [editorImages]);
+
   // Debounce active search terms
   useEffect(() => {
     const handler = setTimeout(() => {
@@ -125,6 +150,7 @@ export default function App() {
           isFavorite: showFavoritesOnly,
           sortBy: sortBy,
           frameCount: frameCountFilter,
+          type: typeFilter !== 'all' ? typeFilter : undefined,
         });
         setProjects(response.projects);
         setStats(response.stats);
@@ -135,7 +161,7 @@ export default function App() {
       }
     };
     fetchFilteredProjects();
-  }, [debouncedSearchTerms, activeCategoryFilter, statusFilter, showFavoritesOnly, sortBy, frameCountFilter, refreshCounter]);
+  }, [debouncedSearchTerms, activeCategoryFilter, statusFilter, showFavoritesOnly, sortBy, frameCountFilter, typeFilter, refreshCounter]);
 
   // Initial load
   useEffect(() => {
@@ -392,11 +418,13 @@ export default function App() {
         description: newProjectDesc,
         categoryId: newProjectCategory,
         tags: tagsToInsert,
+        type: newProjectType,
       });
 
       setNewProjectName('');
       setNewProjectDesc('');
       setNewProjectTagsInput('');
+      setNewProjectType('2d');
       setIsCreateModalOpen(false);
       
       await reloadAllData();
@@ -985,6 +1013,28 @@ export default function App() {
                       </button>
                     </div>
 
+                    {/* Type Filter (2D vs 3D) */}
+                    <div className="bg-slate-950 border border-slate-800 rounded-lg p-0.5 flex">
+                      <button
+                        onClick={() => setTypeFilter('all')}
+                        className={`px-3 py-1 text-[11px] rounded ${typeFilter === 'all' ? 'bg-indigo-600 font-bold text-white' : 'text-slate-400 hover:text-slate-200'} transition cursor-pointer`}
+                      >
+                        All Types
+                      </button>
+                      <button
+                        onClick={() => setTypeFilter('2d')}
+                        className={`px-3 py-1 text-[11px] rounded ${typeFilter === '2d' ? 'bg-indigo-600 font-bold text-white' : 'text-slate-400 hover:text-slate-200'} transition cursor-pointer`}
+                      >
+                        2D
+                      </button>
+                      <button
+                        onClick={() => setTypeFilter('3d')}
+                        className={`px-3 py-1 text-[11px] rounded ${typeFilter === '3d' ? 'bg-indigo-600 font-bold text-white' : 'text-slate-400 hover:text-slate-200'} transition cursor-pointer`}
+                      >
+                        3D
+                      </button>
+                    </div>
+
                     {/* Starred Switcher */}
                     <button
                       onClick={() => setShowFavoritesOnly(!showFavoritesOnly)}
@@ -1023,13 +1073,14 @@ export default function App() {
                       <option value="12">12 Frames</option>
                     </select>
 
-                    {(activeCategoryFilter !== null || showFavoritesOnly || statusFilter !== 'active' || frameCountFilter !== null || searchQuery !== '' || searchTags.length > 0) && (
+                    {(activeCategoryFilter !== null || showFavoritesOnly || statusFilter !== 'active' || frameCountFilter !== null || typeFilter !== 'all' || searchQuery !== '' || searchTags.length > 0) && (
                       <button
                         onClick={() => {
                           setActiveCategoryFilter(null);
                           setShowFavoritesOnly(false);
                           setStatusFilter('active');
                           setFrameCountFilter(null);
+                          setTypeFilter('all');
                           setSearchQuery('');
                           setSearchTags([]);
                         }}
@@ -1128,12 +1179,17 @@ export default function App() {
                             
                             {/* Card Header Media area */}
                             <div className="relative h-44 bg-slate-950 transparent-grid flex items-center justify-center border-b border-slate-950">
-                              {p.coverImage && p.coverImage !== '' ? (
+                              {(p.coverImage && /\.(png|jpe?g|webp)$/i.test(p.coverImage)) ? (
                                 <img
                                   src={p.coverImage}
                                   alt={p.name}
                                   className="max-h-36 max-w-[85%] pixelated object-contain transition-transform group-hover:scale-110 duration-200 pointer-events-none"
                                 />
+                              ) : p.type === '3d' ? (
+                                <div className="text-indigo-600/70 flex flex-col items-center justify-center gap-1.5 text-[11px]">
+                                  <Box className="w-8 h-8 text-indigo-400/80 animate-pulse" />
+                                  <span>No 3D Cover</span>
+                                </div>
                               ) : (
                                 <div className="text-slate-600 flex flex-col items-center justify-center gap-1 text-[11px]">
                                   <ImageIcon className="w-7 h-7" />
@@ -1176,11 +1232,9 @@ export default function App() {
                               </div>
 
                               {/* Size spec display bottom-right */}
-                              {p.frameWidth && (
-                                <span className="absolute bottom-3 right-3 px-2 py-0.5 bg-slate-950/80 font-mono text-[9px] text-slate-400 rounded border border-slate-800">
-                                  {p.frameWidth}x{p.frameHeight} px
-                                </span>
-                              )}
+                              <span className="absolute bottom-3 right-3 px-2 py-0.5 bg-slate-950/80 font-mono text-[9px] text-slate-400 rounded border border-slate-800">
+                                {p.type === '3d' ? '3D Project' : `${p.frameWidth}x${p.frameHeight} px`}
+                              </span>
                             </div>
 
                             {/* Card Content parameters */}
@@ -1343,6 +1397,53 @@ export default function App() {
                   {/* Left Sidebar Panel - Tags & Version History (lg:col-span-3) */}
                   <div className="lg:col-span-3 flex flex-col gap-5">
                     
+                    {/* Project Cover Image Manager */}
+                    <div className="bg-slate-900/30 border border-slate-800 p-4 rounded-lg flex flex-col gap-3">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Project Cover</label>
+                      <div className="aspect-video bg-slate-950 rounded-lg border border-slate-850 overflow-hidden relative flex items-center justify-center transparent-grid group/cover">
+                        {currentProject?.coverImage ? (
+                          <img
+                            src={currentProject.coverImage}
+                            alt="Project cover"
+                            className="max-h-full max-w-full object-contain"
+                          />
+                        ) : currentProject?.type === '3d' ? (
+                          <div className="text-slate-600 flex flex-col items-center justify-center gap-1 text-[11px]">
+                            <Box className="w-8 h-8 text-indigo-400/70" />
+                            <span>No Cover Image</span>
+                          </div>
+                        ) : (
+                          <div className="text-slate-600 flex flex-col items-center justify-center gap-1 text-[11px]">
+                            <ImageIcon className="w-8 h-8" />
+                            <span>No Cover Image</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex justify-center">
+                        <label className="w-full py-2 bg-slate-950 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-300 rounded-lg text-xs font-bold cursor-pointer transition flex items-center justify-center gap-1.5">
+                          <Upload className="w-3.5 h-3.5 text-indigo-400" />
+                          Change Cover Image
+                          <input
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp"
+                            className="hidden"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              if (file && currentProjectId) {
+                                try {
+                                  const updatedProj = await uploadProjectCover(currentProjectId, file);
+                                  setCurrentProject(updatedProj);
+                                  await reloadAllData();
+                                } catch (err) {
+                                  alert(err instanceof Error ? err.message : 'Failed to upload cover');
+                                }
+                              }
+                            }}
+                          />
+                        </label>
+                      </div>
+                    </div>
+
                     {/* Tags sub-manager */}
                     <div className="bg-slate-900/30 border border-slate-800 p-4 rounded-lg flex flex-col gap-3">
                       <div>
@@ -1377,10 +1478,13 @@ export default function App() {
                     
                     {/* Integrated Upload Area */}
                     <div className="bg-slate-950 border border-slate-900 p-4 rounded-lg flex flex-col gap-3">
-                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block animate-none">Add Images</label>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block animate-none">
+                        {currentProject?.type === '3d' ? 'Add 3D Files / Assets' : 'Add Images'}
+                      </label>
                       <UploadZone
                         onFilesSelected={handleAddImages}
                         uploading={uploadingImages}
+                        projectType={currentProject?.type}
                       />
                     </div>
 
@@ -1388,7 +1492,7 @@ export default function App() {
                     <div className="bg-slate-950 border border-slate-905 p-4 rounded-lg flex flex-col gap-4">
                       <div className="flex items-center justify-between gap-3 border-b border-slate-900 pb-2.5">
                         <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">
-                          Clip Frame Grid ({editorImages.length} items)
+                          {currentProject?.type === '3d' ? '3D Project Assets' : 'Clip Frame Grid'} ({editorImages.length} items)
                         </label>
 
                         {/* Selection aids */}
@@ -1396,7 +1500,7 @@ export default function App() {
                           <button
                             onClick={handleSortImagesByName}
                             className="text-amber-400 hover:underline cursor-pointer"
-                            title="Sort frames by number in filename (0001 → 0033)"
+                            title={currentProject?.type === '3d' ? "Sort files by filename" : "Sort frames by number in filename (0001 → 0033)"}
                           >
                             Auto Sort
                           </button>
@@ -1419,93 +1523,121 @@ export default function App() {
 
                       {editorImages.length === 0 ? (
                         <div className="py-12 text-center text-slate-500 border border-dashed border-slate-800 rounded-lg flex flex-col items-center justify-center">
-                          <ImageIcon className="w-8 h-8 text-slate-700 mb-2" />
-                          <p className="text-xs">This project has no frames yet.</p>
-                          <p className="text-[10px] text-slate-500 mt-1">Drag files or use instructions container above.</p>
+                          {currentProject?.type === '3d' ? (
+                            <>
+                              <Box className="w-8 h-8 text-indigo-400 mb-2 animate-pulse" />
+                              <p className="text-xs">This project has no 3D files yet.</p>
+                              <p className="text-[10px] text-slate-500 mt-1">Drag files (.obj, .blend, .fbx, .gltf etc.) above.</p>
+                            </>
+                          ) : (
+                            <>
+                              <ImageIcon className="w-8 h-8 text-slate-700 mb-2" />
+                              <p className="text-xs">This project has no frames yet.</p>
+                              <p className="text-[10px] text-slate-500 mt-1">Drag files or use instructions container above.</p>
+                            </>
+                          )}
                         </div>
                       ) : (
                         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-                          {editorImages.map((img, idx) => (
-                            <div
-                              key={img.id}
-                              className={`bg-slate-900 border rounded-lg p-3 group flex flex-col justify-between transition-all ${
-                                img.isSelected 
-                                  ? 'border-indigo-500/30' 
-                                  : 'border-slate-850 opacity-65'
-                              }`}
-                            >
-                              
-                              {/* Stage render with indicators matching Mockup styling */}
-                              <div className="aspect-square bg-slate-800 rounded-md border border-slate-700 mb-2 relative overflow-hidden flex items-center justify-center transparent-grid">
-                                <img
-                                  src={img.imageSrc}
-                                  alt={img.fileName}
-                                  className="max-h-[85%] max-w-[85%] pixelated object-contain pointer-events-none"
-                                />
+                          {editorImages.map((img, idx) => {
+                            const isImg = /\.(png|jpe?g|webp)$/i.test(img.fileName);
+                            return (
+                              <div
+                                key={img.id}
+                                className={`bg-slate-900 border rounded-lg p-3 group flex flex-col justify-between transition-all ${
+                                  img.isSelected 
+                                    ? 'border-indigo-500/30' 
+                                    : 'border-slate-850 opacity-65'
+                                }`}
+                              >
+                                
+                                {/* Stage render with indicators matching Mockup styling */}
+                                <div className="aspect-square bg-slate-800 rounded-md border border-slate-700 mb-2 relative overflow-hidden flex items-center justify-center transparent-grid">
+                                  {isImg ? (
+                                    <img
+                                      src={img.imageSrc}
+                                      alt={img.fileName}
+                                      className="max-h-[85%] max-w-[85%] pixelated object-contain pointer-events-none"
+                                    />
+                                  ) : (
+                                    <div className="text-slate-400 flex flex-col items-center justify-center gap-1.5 text-[11px] font-bold">
+                                      <Box className="w-10 h-10 text-indigo-400/80" />
+                                      <span className="bg-slate-950 px-2 py-0.5 border border-slate-800 rounded font-mono text-[9px] uppercase text-indigo-300">
+                                        {img.fileName.split('.').pop() || 'File'}
+                                      </span>
+                                    </div>
+                                  )}
 
-                                {/* Format / Number indicators inside mockup shape */}
-                                <div className="absolute inset-y-0 inset-x-0 pointer-events-none flex items-center justify-center opacity-35">
-                                  <div className="w-12 h-12 border-2 border-slate-650 border-dashed rounded-full flex items-center justify-center text-slate-500 text-xs font-mono font-bold">
-                                    {String(idx + 1).padStart(2, '0')}
+                                  {/* Format / Number indicators inside mockup shape */}
+                                  {currentProject?.type !== '3d' && (
+                                    <div className="absolute inset-y-0 inset-x-0 pointer-events-none flex items-center justify-center opacity-35">
+                                      <div className="w-12 h-12 border-2 border-slate-650 border-dashed rounded-full flex items-center justify-center text-slate-500 text-xs font-mono font-bold">
+                                        {String(idx + 1).padStart(2, '0')}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  <input
+                                    type="checkbox"
+                                    checked={img.isSelected || false}
+                                    onChange={(e) => handleImageSelectToggle(img.id!, e.target.checked)}
+                                    className="absolute top-2 left-2 rounded bg-slate-700 border-slate-600 text-indigo-500 w-3.5 h-3.5 cursor-pointer"
+                                    title={currentProject?.type === '3d' ? "Select file" : "Include in sheet"}
+                                  />
+
+                                  <span className="absolute bottom-1 right-1 px-1.5 py-0.5 bg-black/80 text-[8px] rounded text-slate-300 font-mono">
+                                    {isImg ? `${frameWidth}x${frameHeight}` : '3D FILE'}
+                                  </span>
+                                </div>
+
+                                {/* Label structure exactly like mockup */}
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-mono text-slate-400 truncate max-w-[90px]" title={img.fileName}>
+                                    {img.fileName}
+                                  </span>
+
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    {currentProject?.type !== '3d' && (
+                                      <>
+                                        <button
+                                          onClick={() => handleMoveFrame(idx, 'left')}
+                                          disabled={idx === 0}
+                                          className="p-1 hover:bg-slate-800 disabled:opacity-20 rounded text-slate-400 hover:text-white"
+                                          title="Move Frame Left"
+                                        >
+                                          <MoveLeft className="w-3 h-3" />
+                                        </button>
+                                        <button
+                                          onClick={() => handleMoveFrame(idx, 'right')}
+                                          disabled={idx === editorImages.length - 1}
+                                          className="p-1 hover:bg-slate-800 disabled:opacity-20 rounded text-slate-400 hover:text-white"
+                                          title="Move Frame Right"
+                                        >
+                                          <MoveRight className="w-3 h-3" />
+                                        </button>
+                                      </>
+                                    )}
+                                    <a
+                                      href={img.imageSrc}
+                                      download={img.fileName}
+                                      className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-indigo-400 flex items-center justify-center cursor-pointer"
+                                      title={currentProject?.type === '3d' ? "Download File" : "Download Frame"}
+                                    >
+                                      <Download className="w-3 h-3" />
+                                    </a>
+                                    <button
+                                      onClick={() => handleDeleteImage(img.id!)}
+                                      className="p-1 hover:bg-rose-950/30 rounded text-slate-500 hover:text-rose-400"
+                                      title={currentProject?.type === '3d' ? "Delete File" : "Delete Frame"}
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
                                   </div>
                                 </div>
 
-                                <input
-                                  type="checkbox"
-                                  checked={img.isSelected || false}
-                                  onChange={(e) => handleImageSelectToggle(img.id!, e.target.checked)}
-                                  className="absolute top-2 left-2 rounded bg-slate-700 border-slate-600 text-indigo-500 w-3.5 h-3.5 cursor-pointer"
-                                  title="Include in sheet"
-                                />
-
-                                <span className="absolute bottom-1 right-1 px-1.5 py-0.5 bg-black/80 text-[8px] rounded text-slate-300 font-mono">
-                                  {frameWidth}x{frameHeight}
-                                </span>
                               </div>
-
-                              {/* Label structure exactly like mockup */}
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs font-mono text-slate-400 truncate max-w-[90px]" title={img.fileName}>
-                                  {img.fileName}
-                                </span>
-
-                                <div className="flex items-center gap-1 shrink-0">
-                                  <button
-                                    onClick={() => handleMoveFrame(idx, 'left')}
-                                    disabled={idx === 0}
-                                    className="p-1 hover:bg-slate-800 disabled:opacity-20 rounded text-slate-400 hover:text-white"
-                                    title="Move Frame Left"
-                                  >
-                                    <MoveLeft className="w-3 h-3" />
-                                  </button>
-                                  <button
-                                    onClick={() => handleMoveFrame(idx, 'right')}
-                                    disabled={idx === editorImages.length - 1}
-                                    className="p-1 hover:bg-slate-800 disabled:opacity-20 rounded text-slate-400 hover:text-white"
-                                    title="Move Frame Right"
-                                  >
-                                    <MoveRight className="w-3 h-3" />
-                                  </button>
-                                  <a
-                                    href={img.imageSrc}
-                                    download={img.fileName}
-                                    className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-indigo-400 flex items-center justify-center cursor-pointer"
-                                    title="Download Frame"
-                                  >
-                                    <Download className="w-3 h-3" />
-                                  </a>
-                                  <button
-                                    onClick={() => handleDeleteImage(img.id!)}
-                                    className="p-1 hover:bg-rose-950/30 rounded text-slate-500 hover:text-rose-400"
-                                    title="Delete Frame"
-                                  >
-                                    <Trash2 className="w-3 h-3" />
-                                  </button>
-                                </div>
-                              </div>
-
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       )}
                     </div>
@@ -1513,198 +1645,241 @@ export default function App() {
 
                   {/* Right Column - Settings Inspector & Exporters (lg:col-span-3) */}
                   <div className="lg:col-span-3 flex flex-col gap-5">
-                    
-                    {/* Size and Resize parameter configuration panel */}
-                    <div className="bg-slate-900/40 border border-slate-800 p-4 rounded-lg flex flex-col gap-4">
-                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Resize Settings</label>
+                    {currentProject?.type === '3d' ? (
+                      /* ==================== 3D PROJECT SUMMARY PANEL ==================== */
+                      <div className="bg-slate-900/40 border border-slate-800 p-4 rounded-lg flex flex-col gap-4">
+                        <label className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest block">3D Asset Details</label>
+                        
+                        <div className="space-y-3.5 mt-2">
+                          <div className="bg-slate-950/60 p-3 rounded-lg border border-slate-850 flex items-center justify-between">
+                            <span className="text-xs text-slate-400">Total Files</span>
+                            <span className="text-sm font-bold text-white font-mono">{fileStats.total}</span>
+                          </div>
 
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1">
-                          <label className="text-[10px] text-slate-400 mb-1 block">Width</label>
-                          <input
-                            type="number"
-                            min="4"
-                            max="4096"
-                            value={frameWidth}
-                            onChange={(e) => handleWidthChange(parseInt(e.target.value, 10))}
-                            className="w-full bg-slate-800 border-slate-750 text-indigo-400 rounded text-sm px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-600 font-mono"
-                          />
+                          <div className="text-xs space-y-2 px-1">
+                            <div className="flex justify-between items-center">
+                              <span className="text-slate-500">Blender Files (.blend)</span>
+                              <span className="font-semibold text-slate-300 font-mono">{fileStats.blender}</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-slate-500">3D Models (OBJ/FBX/etc)</span>
+                              <span className="font-semibold text-slate-300 font-mono">{fileStats.models}</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-slate-500">Textures & Images</span>
+                              <span className="font-semibold text-slate-300 font-mono">{fileStats.images}</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                              <span className="text-slate-500">Other Supporting Files</span>
+                              <span className="font-semibold text-slate-300 font-mono">{fileStats.other}</span>
+                            </div>
+                          </div>
                         </div>
-                        <div className="pt-4 text-slate-600 font-mono">×</div>
-                        <div className="flex-1">
-                          <label className="text-[10px] text-slate-400 mb-1 block">Height</label>
-                          <input
-                            type="number"
-                            min="4"
-                            max="4096"
-                            value={frameHeight}
-                            onChange={(e) => handleHeightChange(parseInt(e.target.value, 10))}
-                            className="w-full bg-slate-800 border-slate-750 text-indigo-400 rounded text-sm px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-600 font-mono"
-                          />
+
+                        <div className="border-t border-slate-800/80 pt-3.5 mt-1">
+                          <div className="p-3 bg-indigo-950/20 border border-indigo-900/30 rounded-lg text-slate-400 text-xs flex gap-2">
+                            <Info className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
+                            <p className="leading-relaxed font-sans">
+                              This is a 3D Project. You can store your Blender source files, 3D model formats (like OBJ, FBX, GLTF), material specifications (MTL), and texture images here.
+                            </p>
+                          </div>
                         </div>
                       </div>
+                    ) : (
+                      /* ==================== 2D SPRITE SHEET STITCHING ENGINE ==================== */
+                      <>
+                        {/* Size and Resize parameter configuration panel */}
+                        <div className="bg-slate-900/40 border border-slate-800 p-4 rounded-lg flex flex-col gap-4">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Resize Settings</label>
 
-                      {/* Aspect Ratio Constraint */}
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={lockAspect}
-                          onChange={toggleLockAspect}
-                          id="lock-aspect"
-                          className="rounded bg-slate-700 border-slate-600 text-indigo-500 w-3.5 h-3.5 cursor-pointer"
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1">
+                              <label className="text-[10px] text-slate-400 mb-1 block">Width</label>
+                              <input
+                                type="number"
+                                min="4"
+                                max="4096"
+                                value={frameWidth}
+                                onChange={(e) => handleWidthChange(parseInt(e.target.value, 10))}
+                                className="w-full bg-slate-800 border-slate-750 text-indigo-400 rounded text-sm px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-600 font-mono"
+                              />
+                            </div>
+                            <div className="pt-4 text-slate-600 font-mono">×</div>
+                            <div className="flex-1">
+                              <label className="text-[10px] text-slate-400 mb-1 block">Height</label>
+                              <input
+                                type="number"
+                                min="4"
+                                max="4096"
+                                value={frameHeight}
+                                onChange={(e) => handleHeightChange(parseInt(e.target.value, 10))}
+                                className="w-full bg-slate-800 border-slate-750 text-indigo-400 rounded text-sm px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-600 font-mono"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Aspect Ratio Constraint */}
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={lockAspect}
+                              onChange={toggleLockAspect}
+                              id="lock-aspect"
+                              className="rounded bg-slate-700 border-slate-600 text-indigo-500 w-3.5 h-3.5 cursor-pointer"
+                            />
+                            <label htmlFor="lock-aspect" className="text-xs text-slate-400 cursor-pointer select-none">
+                              Lock Aspect Ratio
+                            </label>
+                          </div>
+
+                          {/* CREATE SPRITE SHEET BUTTON */}
+                          <button
+                            onClick={handleStitchSpriteSheet}
+                            disabled={editorImages.length === 0}
+                            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2 rounded-md text-sm font-semibold transition-colors shadow-lg shadow-indigo-900/20 active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+                          >
+                            Create Sprite Sheet
+                          </button>
+                          {editorSheets.length > 0 && (
+                            <p className="text-[9px] text-slate-500 text-center">
+                              Regenerating replaces the previous sprite sheet.
+                            </p>
+                          )}
+                        </div>
+
+                        {editorSheets.length > 0 && (
+                          <div className="p-3 bg-indigo-500/5 rounded border border-indigo-500/20 flex flex-col gap-3">
+                            <div className="flex justify-between items-center">
+                              <span className="text-[10px] font-bold text-indigo-400 uppercase">Output Preview</span>
+                              <span className="text-[9px] text-slate-500 font-mono truncate max-w-[140px]">
+                                {currentProject?.name.toLowerCase().replace(/\s+/g, '_')}_sheet.png
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="flex flex-col gap-1.5">
+                                <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider text-center">Facing Right</span>
+                                <div className="h-20 bg-slate-950 rounded border border-slate-800 flex items-center justify-center p-1.5 transparent-grid overflow-hidden">
+                                  <img
+                                    src={editorSheets[0]?.sheetSrc}
+                                    alt="Sprite sheet facing right"
+                                    className="max-h-full max-w-full pixelated object-contain"
+                                  />
+                                </div>
+                              </div>
+                              <div className="flex flex-col gap-1.5">
+                                <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider text-center">Facing Left (Reverse)</span>
+                                <div className="h-20 bg-slate-950 rounded border border-slate-800 flex items-center justify-center p-1.5 transparent-grid overflow-hidden">
+                                  <img
+                                    src={editorSheets[0]?.reverseSheetSrc || editorSheets[0]?.sheetSrc}
+                                    alt="Sprite sheet facing left"
+                                    className="max-h-full max-w-full pixelated object-contain"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+
+                            <button
+                              onClick={() => handleDownloadSingleSheet(editorSheets[0], currentProject?.name || 'sheet', false)}
+                              className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-2.5 rounded-md text-sm font-bold transition-colors shadow-lg shadow-emerald-900/25 active:scale-[0.98] flex items-center justify-center gap-2 cursor-pointer"
+                            >
+                              <Download className="w-4 h-4" />
+                              Download Sprite Sheet — Facing Right
+                            </button>
+
+                            <button
+                              onClick={() => handleDownloadSingleSheet(editorSheets[0], currentProject?.name || 'sheet', true)}
+                              disabled={!editorSheets[0]?.reverseSheetSrc}
+                              className="w-full bg-violet-600 hover:bg-violet-500 text-white py-2.5 rounded-md text-sm font-bold transition-colors shadow-lg shadow-violet-900/25 active:scale-[0.98] flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
+                            >
+                              <FlipHorizontal className="w-4 h-4" />
+                              Download Sprite Sheet — Facing Left (Reverse)
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Exporters specifications report */}
+                        {editorSheets.length > 0 && (
+                          <div className="bg-slate-900/40 border border-slate-800 p-4 rounded-lg flex flex-col gap-3">
+                            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Export Details</label>
+                            <div className="space-y-2 text-xs">
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">Format</span>
+                                <span className="font-medium text-slate-350">PNG 32-bit</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">Total Size</span>
+                                <span className="font-medium font-mono text-slate-300">{editorSheets[0]?.sheetWidth} × {editorSheets[0]?.sheetHeight} px</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">Frame Count</span>
+                                <span className="font-medium font-mono text-slate-300">{editorSheets[0]?.frameCount} frames</span>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Integrated Metadata Atlas Exporters */}
+                        {editorSheets.length > 0 && (
+                          <div className="bg-slate-900/30 border border-slate-800 p-4 rounded-lg flex flex-col gap-3">
+                            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Engine Metadata</label>
+
+                            {/* Format selector */}
+                            <div className="grid grid-cols-5 gap-0.5 bg-slate-950 p-0.5 border border-slate-800 rounded">
+                              {['json', 'xml', 'unity', 'godot', 'phaser'].map((fmt) => (
+                                <button
+                                  key={fmt}
+                                  onClick={() => setExporterFormat(fmt as any)}
+                                  className={`py-0.5 rounded text-[8px] font-bold uppercase transition select-none tracking-wider ${
+                                    exporterFormat === fmt 
+                                      ? 'bg-indigo-600 text-white' 
+                                      : 'text-slate-500 hover:text-slate-300'
+                                  } cursor-pointer`}
+                                >
+                                  {fmt}
+                                </button>
+                              ))}
+                            </div>
+
+                            {/* Export block */}
+                            <div className="relative mt-1">
+                              <pre className="p-2.5 bg-slate-950 rounded border border-slate-900 text-[9px] font-mono text-indigo-400 overflow-x-auto max-h-32 overflow-y-auto">
+                                <code>{activeMetadataOutput}</code>
+                              </pre>
+                              
+                              <div className="absolute right-2 bottom-2 flex items-center gap-1">
+                                <button
+                                  onClick={handleCopyMetadata}
+                                  className="p-1 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded border border-slate-800 transition"
+                                  title="Copy Code"
+                                >
+                                  <Copy className="w-3 h-3" />
+                                </button>
+                                <button
+                                  onClick={downloadMetadataFile}
+                                  className="p-1 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded border border-slate-800 transition"
+                                  title="Download coordinates schema"
+                                >
+                                  <Download className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Animation live preview player box (placed at the bottom of Right Column) */}
+                        <AnimationPreview
+                          sheetSrc={editorSheets[0] ? `${editorSheets[0].sheetSrc}?t=${editorSheets[0].createdAt}` : ''}
+                          frameCount={editorSheets[0]?.frameCount || 0}
+                          frameWidth={editorSheets[0]?.frameWidth || 64}
+                          frameHeight={editorSheets[0]?.frameHeight || 64}
+                          sheetWidth={editorSheets[0]?.sheetWidth}
+                          sheetHeight={editorSheets[0]?.sheetHeight}
+                          initialFps={currentProject?.fps || 10}
+                          onFpsChange={handleEditorFpsChange}
                         />
-                        <label htmlFor="lock-aspect" className="text-xs text-slate-400 cursor-pointer select-none">
-                          Lock Aspect Ratio
-                        </label>
-                      </div>
-
-                      {/* CREATE SPRITE SHEET BUTTON */}
-                      <button
-                        onClick={handleStitchSpriteSheet}
-                        disabled={editorImages.length === 0}
-                        className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2 rounded-md text-sm font-semibold transition-colors shadow-lg shadow-indigo-900/20 active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
-                      >
-                        Create Sprite Sheet
-                      </button>
-                      {editorSheets.length > 0 && (
-                        <p className="text-[9px] text-slate-500 text-center">
-                          Regenerating replaces the previous sprite sheet.
-                        </p>
-                      )}
-                    </div>
-
-                    {editorSheets.length > 0 && (
-                      <div className="p-3 bg-indigo-500/5 rounded border border-indigo-500/20 flex flex-col gap-3">
-                        <div className="flex justify-between items-center">
-                          <span className="text-[10px] font-bold text-indigo-400 uppercase">Output Preview</span>
-                          <span className="text-[9px] text-slate-500 font-mono truncate max-w-[140px]">
-                            {currentProject?.name.toLowerCase().replace(/\s+/g, '_')}_sheet.png
-                          </span>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="flex flex-col gap-1.5">
-                            <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider text-center">Facing Right</span>
-                            <div className="h-20 bg-slate-950 rounded border border-slate-800 flex items-center justify-center p-1.5 transparent-grid overflow-hidden">
-                              <img
-                                src={editorSheets[0]?.sheetSrc}
-                                alt="Sprite sheet facing right"
-                                className="max-h-full max-w-full pixelated object-contain"
-                              />
-                            </div>
-                          </div>
-                          <div className="flex flex-col gap-1.5">
-                            <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider text-center">Facing Left (Reverse)</span>
-                            <div className="h-20 bg-slate-950 rounded border border-slate-800 flex items-center justify-center p-1.5 transparent-grid overflow-hidden">
-                              <img
-                                src={editorSheets[0]?.reverseSheetSrc || editorSheets[0]?.sheetSrc}
-                                alt="Sprite sheet facing left"
-                                className="max-h-full max-w-full pixelated object-contain"
-                              />
-                            </div>
-                          </div>
-                        </div>
-
-                        <button
-                          onClick={() => handleDownloadSingleSheet(editorSheets[0], currentProject?.name || 'sheet', false)}
-                          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-2.5 rounded-md text-sm font-bold transition-colors shadow-lg shadow-emerald-900/25 active:scale-[0.98] flex items-center justify-center gap-2 cursor-pointer"
-                        >
-                          <Download className="w-4 h-4" />
-                          Download Sprite Sheet — Facing Right
-                        </button>
-
-                        <button
-                          onClick={() => handleDownloadSingleSheet(editorSheets[0], currentProject?.name || 'sheet', true)}
-                          disabled={!editorSheets[0]?.reverseSheetSrc}
-                          className="w-full bg-violet-600 hover:bg-violet-500 text-white py-2.5 rounded-md text-sm font-bold transition-colors shadow-lg shadow-violet-900/25 active:scale-[0.98] flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
-                        >
-                          <FlipHorizontal className="w-4 h-4" />
-                          Download Sprite Sheet — Facing Left (Reverse)
-                        </button>
-                      </div>
+                      </>
                     )}
-
-                    {/* Exporters specifications report */}
-                    {editorSheets.length > 0 && (
-                      <div className="bg-slate-900/40 border border-slate-800 p-4 rounded-lg flex flex-col gap-3">
-                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Export Details</label>
-                        <div className="space-y-2 text-xs">
-                          <div className="flex justify-between">
-                            <span className="text-slate-500">Format</span>
-                            <span className="font-medium text-slate-350">PNG 32-bit</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-slate-500">Total Size</span>
-                            <span className="font-medium font-mono text-slate-300">{editorSheets[0]?.sheetWidth} × {editorSheets[0]?.sheetHeight} px</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-slate-500">Frame Count</span>
-                            <span className="font-medium font-mono text-slate-300">{editorSheets[0]?.frameCount} frames</span>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Integrated Metadata Atlas Exporters */}
-                    {editorSheets.length > 0 && (
-                      <div className="bg-slate-900/30 border border-slate-800 p-4 rounded-lg flex flex-col gap-3">
-                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Engine Metadata</label>
-
-                        {/* Format selector */}
-                        <div className="grid grid-cols-5 gap-0.5 bg-slate-950 p-0.5 border border-slate-800 rounded">
-                          {['json', 'xml', 'unity', 'godot', 'phaser'].map((fmt) => (
-                            <button
-                              key={fmt}
-                              onClick={() => setExporterFormat(fmt as any)}
-                              className={`py-0.5 rounded text-[8px] font-bold uppercase transition select-none tracking-wider ${
-                                exporterFormat === fmt 
-                                  ? 'bg-indigo-600 text-white' 
-                                  : 'text-slate-500 hover:text-slate-300'
-                              } cursor-pointer`}
-                            >
-                              {fmt}
-                            </button>
-                          ))}
-                        </div>
-
-                        {/* Export block */}
-                        <div className="relative mt-1">
-                          <pre className="p-2.5 bg-slate-950 rounded border border-slate-900 text-[9px] font-mono text-indigo-400 overflow-x-auto max-h-32 overflow-y-auto">
-                            <code>{activeMetadataOutput}</code>
-                          </pre>
-                          
-                          <div className="absolute right-2 bottom-2 flex items-center gap-1">
-                            <button
-                              onClick={handleCopyMetadata}
-                              className="p-1 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded border border-slate-800 transition"
-                              title="Copy Code"
-                            >
-                              <Copy className="w-3 h-3" />
-                            </button>
-                            <button
-                              onClick={downloadMetadataFile}
-                              className="p-1 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded border border-slate-800 transition"
-                              title="Download coordinates schema"
-                            >
-                              <Download className="w-3 h-3" />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Animation live preview player box (placed at the bottom of Right Column) */}
-                    <AnimationPreview
-                      sheetSrc={editorSheets[0] ? `${editorSheets[0].sheetSrc}?t=${editorSheets[0].createdAt}` : ''}
-                      frameCount={editorSheets[0]?.frameCount || 0}
-                      frameWidth={editorSheets[0]?.frameWidth || 64}
-                      frameHeight={editorSheets[0]?.frameHeight || 64}
-                      sheetWidth={editorSheets[0]?.sheetWidth}
-                      sheetHeight={editorSheets[0]?.sheetHeight}
-                      initialFps={currentProject?.fps || 10}
-                      onFpsChange={handleEditorFpsChange}
-                    />
-
                   </div>
 
                 </div>
@@ -1766,6 +1941,35 @@ export default function App() {
                     onChange={(e) => setNewProjectName(e.target.value)}
                     className="bg-slate-950 border border-slate-800 hover:border-slate-700 focus:border-indigo-600 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-600"
                   />
+                </div>
+
+                {/* Project Type */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold text-slate-400">Project Type</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setNewProjectType('2d')}
+                      className={`px-4 py-2.5 rounded-xl text-xs font-semibold border transition cursor-pointer flex items-center justify-center gap-2 ${
+                        newProjectType === '2d'
+                          ? 'bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-900/30'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-white'
+                      }`}
+                    >
+                      <span>2D Sprite / Animation</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewProjectType('3d')}
+                      className={`px-4 py-2.5 rounded-xl text-xs font-semibold border transition cursor-pointer flex items-center justify-center gap-2 ${
+                        newProjectType === '3d'
+                          ? 'bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-900/30'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-white'
+                      }`}
+                    >
+                      <span>3D Model / Asset</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Description */}

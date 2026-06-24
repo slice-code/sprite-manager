@@ -13,6 +13,8 @@ import {
   reversedSheetFilePath,
   uniqueFramePath,
   compressPngBuffer,
+  projectCoverPath,
+  toAbsolutePath,
 } from './storage.js';
 import {
   mapCategory,
@@ -29,7 +31,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
 const app = express();
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '100mb' }));
 
 app.use('/uploads', express.static(UPLOADS_DIR));
 
@@ -106,7 +108,7 @@ app.get('/api/categories', (_req, res) => {
 // --- Projects list ---
 app.get('/api/projects', (req, res) => {
   const db = getDb();
-  const { search, categoryId, status, isFavorite, sortBy, frameCount } = req.query;
+  const { search, categoryId, status, isFavorite, sortBy, frameCount, type } = req.query;
 
   const whereClauses: string[] = [];
   const params: Record<string, any> = {};
@@ -132,6 +134,12 @@ app.get('/api/projects', (req, res) => {
   if (frameCount) {
     whereClauses.push('projects.frameCount = :frameCount');
     params.frameCount = parseInt(frameCount as string, 10);
+  }
+
+  // Type Filter
+  if (type === '2d' || type === '3d') {
+    whereClauses.push('projects.type = :type');
+    params.type = type;
   }
 
   // Search Filter (supports multiple comma-separated keywords)
@@ -166,7 +174,8 @@ app.get('/api/projects', (req, res) => {
   const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
   
   const querySql = `
-    SELECT DISTINCT projects.*
+    SELECT DISTINCT projects.*,
+           COALESCE(projects.coverImagePath, (SELECT filePath FROM project_images WHERE projectId = projects.id ORDER BY sortOrder LIMIT 1)) AS resolvedCoverImagePath
     FROM projects
     LEFT JOIN categories ON projects.categoryId = categories.id
     ${whereSql}
@@ -210,25 +219,49 @@ app.get('/api/projects', (req, res) => {
 
 app.get('/api/projects/:id', (req, res) => {
   const db = getDb();
-  const row = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id) as Parameters<typeof mapProject>[0] | undefined;
+  const projectId = parseInt(req.params.id, 10);
+  const row = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Parameters<typeof mapProject>[0] | undefined;
   if (!row) return res.status(404).json({ error: 'Project not found' });
+
+  // Auto duplicate cover on detail load if it is a 2D project and doesn't have a coverImagePath
+  if ((row.type || '2d') === '2d' && !row.coverImagePath) {
+    const firstFrame = db.prepare('SELECT filePath, fileName FROM project_images WHERE projectId = ? ORDER BY sortOrder LIMIT 1').get(projectId) as { filePath: string; fileName: string } | undefined;
+    if (firstFrame) {
+      const { absolute: coverAbs, relative: coverRel } = projectCoverPath(projectId, firstFrame.fileName);
+      const frameAbs = toAbsolutePath(firstFrame.filePath);
+      if (fs.existsSync(frameAbs)) {
+        try {
+          fs.copyFileSync(frameAbs, coverAbs);
+          db.prepare('UPDATE projects SET coverImagePath = ? WHERE id = ?').run(coverRel, projectId);
+          row.coverImagePath = coverRel; // update memory row
+        } catch (e) {
+          console.error('Failed to auto-copy cover image:', e);
+        }
+      }
+    }
+  }
+
   res.json(mapProject(row));
 });
 
 app.post('/api/projects', (req, res) => {
   const db = getDb();
-  const { name, description, categoryId, tags = [], frameWidth = 64, frameHeight = 64, fps = 10 } = req.body;
+  const { name, description, categoryId, tags = [], frameWidth = 64, frameHeight = 64, fps = 10, type = '2d' } = req.body;
 
   if (!name?.trim()) {
     return res.status(400).json({ error: 'Project name is required' });
   }
 
+  if (type !== '2d' && type !== '3d') {
+    return res.status(400).json({ error: 'Invalid project type' });
+  }
+
   const now = Date.now();
   const result = db.prepare(`
     INSERT INTO projects (name, description, categoryId, coverImagePath, version, status,
-      frameWidth, frameHeight, frameCount, sheetWidth, sheetHeight, fps, isFavorite, createdAt, updatedAt)
-    VALUES (?, ?, ?, NULL, 0, 'active', ?, ?, 0, 0, 0, ?, 0, ?, ?)
-  `).run(name.trim(), description || '', categoryId || null, frameWidth, frameHeight, fps, now, now);
+      frameWidth, frameHeight, frameCount, sheetWidth, sheetHeight, fps, isFavorite, type, createdAt, updatedAt)
+    VALUES (?, ?, ?, NULL, 0, 'active', ?, ?, 0, 0, 0, ?, 0, ?, ?, ?)
+  `).run(name.trim(), description || '', categoryId || null, frameWidth, frameHeight, fps, type, now, now);
 
   const projectId = Number(result.lastInsertRowid);
 
@@ -276,6 +309,47 @@ app.patch('/api/projects/:id', (req, res) => {
   res.json(mapProject(row));
 });
 
+const uploadCoverMiddleware = multer({
+  storage: multer.memoryStorage(),
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (['.png', '.jpg', '.jpeg', '.webp'].includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only PNG, JPG, or WEBP images are allowed as cover.'));
+    }
+  },
+});
+
+app.post('/api/projects/:id/cover', uploadCoverMiddleware.single('cover'), (req, res) => {
+  const db = getDb();
+  const projectId = parseInt(req.params.id, 10);
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Parameters<typeof mapProject>[0] | undefined;
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const file = req.file;
+  if (!file) {
+    return res.status(400).json({ error: 'No cover image file provided. Use form field "cover".' });
+  }
+
+  try {
+    // Delete previous cover if exists
+    if (project.coverImagePath) {
+      deleteFileIfExists(project.coverImagePath);
+    }
+
+    const { absolute: coverAbs, relative: coverRel } = projectCoverPath(projectId, file.originalname);
+    saveBuffer(file.buffer, coverAbs);
+
+    db.prepare('UPDATE projects SET coverImagePath = ? WHERE id = ?').run(coverRel, projectId);
+
+    const updatedProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Parameters<typeof mapProject>[0];
+    res.json(mapProject(updatedProject));
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to upload cover image' });
+  }
+});
+
 app.delete('/api/projects/:id', (req, res) => {
   const projectId = parseInt(req.params.id, 10);
   const existing = getDb().prepare('SELECT id FROM projects WHERE id = ?').get(projectId);
@@ -293,8 +367,8 @@ app.post('/api/projects/:id/duplicate', (req, res) => {
   const now = Date.now();
   const dupResult = db.prepare(`
     INSERT INTO projects (name, description, categoryId, coverImagePath, version, status,
-      frameWidth, frameHeight, frameCount, sheetWidth, sheetHeight, fps, isFavorite, createdAt, updatedAt)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      frameWidth, frameHeight, frameCount, sheetWidth, sheetHeight, fps, isFavorite, type, createdAt, updatedAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
   `).run(
     `${orig.name} (Copy)`,
     orig.description,
@@ -308,6 +382,7 @@ app.post('/api/projects/:id/duplicate', (req, res) => {
     orig.sheetWidth,
     orig.sheetHeight,
     orig.fps,
+    orig.type || '2d',
     now,
     now
   );
@@ -412,13 +487,22 @@ app.post('/api/projects/:id/images', uploadFrameImages.array('images'), (req, re
 
   const files = req.files as Express.Multer.File[] | undefined;
   if (!files || files.length === 0) {
-    return res.status(400).json({ error: 'No images provided. Use multipart field "images".' });
+    return res.status(400).json({ error: project.type === '3d' ? 'No files provided. Use multipart field "images".' : 'No images provided. Use multipart field "images".' });
   }
 
   try {
     const sortedFiles = sortByNumericFilename(files);
     const existingCount = (db.prepare('SELECT COUNT(*) as c FROM project_images WHERE projectId = ?').get(projectId) as { c: number }).c;
-    const { width, height } = getImageDimensions(sortedFiles[0].buffer);
+    
+    let width = 64;
+    let height = 64;
+    const is3d = (project.type === '3d');
+
+    if (!is3d) {
+      const dims = getImageDimensions(sortedFiles[0].buffer);
+      width = dims.width;
+      height = dims.height;
+    }
 
     for (let i = 0; i < sortedFiles.length; i++) {
       const file = sortedFiles[i];
@@ -432,10 +516,16 @@ app.post('/api/projects/:id/images', uploadFrameImages.array('images'), (req, re
     }
 
     const proj = db.prepare('SELECT coverImagePath FROM projects WHERE id = ?').get(projectId) as { coverImagePath: string | null };
-    if (!proj.coverImagePath) {
-      const first = db.prepare('SELECT filePath FROM project_images WHERE projectId = ? ORDER BY sortOrder LIMIT 1').get(projectId) as { filePath: string };
+    if (!is3d && !proj.coverImagePath) {
+      const first = db.prepare('SELECT filePath, fileName FROM project_images WHERE projectId = ? ORDER BY sortOrder LIMIT 1').get(projectId) as { filePath: string; fileName: string } | undefined;
       if (first) {
-        db.prepare('UPDATE projects SET coverImagePath = ? WHERE id = ?').run(first.filePath, projectId);
+        const { absolute: coverAbs, relative: coverRel } = projectCoverPath(projectId, first.fileName);
+        try {
+          fs.copyFileSync(toAbsolutePath(first.filePath), coverAbs);
+          db.prepare('UPDATE projects SET coverImagePath = ? WHERE id = ?').run(coverRel, projectId);
+        } catch (e) {
+          console.error('Failed to copy cover image:', e);
+        }
       }
     }
 
@@ -444,10 +534,17 @@ app.post('/api/projects/:id/images', uploadFrameImages.array('images'), (req, re
 
     reorderProjectImagesByFilename(projectId);
 
-    db.prepare(`
-      UPDATE projects SET frameCount = ?, frameWidth = ?, frameHeight = ?, updatedAt = ?
-      WHERE id = ?
-    `).run(count, width, height, now, projectId);
+    if (is3d) {
+      db.prepare(`
+        UPDATE projects SET frameCount = ?, updatedAt = ?
+        WHERE id = ?
+      `).run(count, now, projectId);
+    } else {
+      db.prepare(`
+        UPDATE projects SET frameCount = ?, frameWidth = ?, frameHeight = ?, updatedAt = ?
+        WHERE id = ?
+      `).run(count, width, height, now, projectId);
+    }
 
     const rows = db.prepare('SELECT * FROM project_images WHERE projectId = ? ORDER BY sortOrder ASC').all(projectId) as Parameters<typeof mapProjectImage>[0][];
     const updatedProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Parameters<typeof mapProject>[0];

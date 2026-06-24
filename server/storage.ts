@@ -104,6 +104,13 @@ export function uniqueFramePath(projectId: number, fileName: string): { absolute
   return { absolute: dest, relative };
 }
 
+export function projectCoverPath(projectId: number, fileName: string): { absolute: string; relative: string } {
+  ensureProjectDirs(projectId);
+  const ext = path.extname(fileName);
+  const relative = `projects/${projectId}/cover${ext}`;
+  return { absolute: toAbsolutePath(relative), relative };
+}
+
 export function sheetFilePath(projectId: number, version: number): { absolute: string; relative: string } {
   ensureProjectDirs(projectId);
   const relative = `projects/${projectId}/sheets/sheet_v${version}.png`;
